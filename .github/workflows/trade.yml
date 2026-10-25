@@ -1,0 +1,51 @@
+name: trader
+
+on:
+  schedule:
+    # Every 15 minutes, 13:00-21:45 UTC, Mon-Fri. Covers US regular hours in both EDT and EST.
+    # The agent also checks the market clock itself, so off-hours runs do nothing.
+    - cron: "*/15 13-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "Submit paper orders (leave unchecked for a dry run)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never let two cycles run at once, so they cannot race each other on orders.
+concurrency:
+  group: trader
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests (a failing test stops the trade)
+        run: python -m pytest -q
+
+      - name: Trading cycle
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          EXECUTE: ${{ github.event_name == 'schedule' || inputs.execute }}
+        run: |
+          if [ "$EXECUTE" = "true" ]; then
+            python -m trader run --execute
+          else
+            python -m trader run
+          fi

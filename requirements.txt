@@ -1,0 +1,4 @@
+# Lower bounds only. Run `pip freeze` once you have a working install and pin the exact versions.
+alpaca-py>=0.30
+pandas>=2.2
+numpy>=1.26
