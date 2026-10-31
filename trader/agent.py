@@ -7,6 +7,7 @@ which lets the tests run without any network access.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
@@ -14,14 +15,25 @@ from typing import Protocol
 import pandas as pd
 
 from .config import Settings
+from .journal import record as journal_record
 from .research import evaluate_all, qualifying_best
 from .risk import EntryPlan, daily_loss_breached, plan_entry
 from .strategies import STRATEGIES, atr
 
 
 def log(event: str, **fields) -> None:
+    """Print each decision as JSON. If TRADER_JOURNAL is set, also append it to that file.
+
+    Journal failures never stop a trading cycle; they are reported on stdout instead.
+    """
     record = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "event": event, **fields}
     print(json.dumps(record, default=str), flush=True)
+    path = os.getenv("TRADER_JOURNAL")
+    if path:
+        try:
+            journal_record(path, event, **fields)
+        except OSError as exc:
+            print(json.dumps({"event": "journal_error", "error": str(exc)}), flush=True)
 
 
 class Broker(Protocol):
