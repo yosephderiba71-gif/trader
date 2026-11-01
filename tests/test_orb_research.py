@@ -35,8 +35,22 @@ def test_no_trades_means_gates_fail():
     assert result["passed_gates"] is False
 
 
-def test_gates_are_the_pre_set_values():
-    assert GATES == {"min_oos_trades": 30, "min_oos_expectancy_r": 0.0, "max_oos_drawdown_r": -10.0}
+def test_gates_are_the_stated_values():
+    assert GATES == {
+        "min_oos_trades_per_symbol": 100,
+        "min_oos_expectancy_r": 0.10,
+        "min_oos_expectancy_double_cost_r": 0.0,
+        "min_positive_halves": 2,
+        "min_years": 5,
+        "min_positive_years": 4,
+        "max_oos_drawdown_r": -10.0,
+    }
+
+
+def test_too_little_history_fails_the_years_check():
+    result = evaluate("TEST", _days(10), "trail", VARIANTS["trail"])
+    assert result["checks"]["enough_years"] is False
+    assert result["passed_gates"] is False
 
 
 def test_research_module_cannot_place_orders():

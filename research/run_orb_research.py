@@ -5,12 +5,17 @@ so it cannot place orders. It writes a JSON report to research/results/.
 
 Run: python -m research.run_orb_research
 Environment: ALPACA_API_KEY, ALPACA_API_SECRET (read only, never printed), optional
-SYMBOLS (default GLD,SPY) and LOOKBACK_DAYS (default 730).
+SYMBOLS (default GLD,SPY) and LOOKBACK_DAYS (default 730; use 1825 for five years).
+
+Important: these gates were set after the first two-year run, and the same history is reused.
+A pass here is a filter, not proof of an edge. The real test is trading on days that come after
+the rules are fixed.
 """
 from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,9 +23,17 @@ import pandas as pd
 
 from trader.orb import OrbConfig, run_orb, summarize
 
-# Fixed before any results are seen. Out-of-sample days are never used to choose settings.
 TRAIN_FRACTION = 0.7
-GATES = {"min_oos_trades": 30, "min_oos_expectancy_r": 0.0, "max_oos_drawdown_r": -10.0}
+GATES = {
+    "min_oos_trades_per_symbol": 100,
+    "min_oos_expectancy_r": 0.10,            # at the normal 0.05R cost assumption
+    "min_oos_expectancy_double_cost_r": 0.0,  # still not losing at 0.10R costs
+    "min_positive_halves": 2,                # both halves of all the data must be positive
+    "min_years": 5,                          # need at least five calendar years of data
+    "min_positive_years": 4,                 # at least four of those years must be positive
+    "max_oos_drawdown_r": -10.0,
+}
+DOUBLE_COST_R = 0.10
 VARIANTS = {"trail": OrbConfig(trail=True), "fixed_stop": OrbConfig(trail=False)}
 OUT_DIR = Path("research/results")
 
@@ -62,17 +75,36 @@ def evaluate(symbol: str, df: pd.DataFrame, variant: str, cfg: OrbConfig) -> dic
     train, test = split_by_day(df, cfg)
     in_sample = summarize(run_orb(train, cfg))
     out_sample = summarize(run_orb(test, cfg))
-    passed = (
-        out_sample["trades"] >= GATES["min_oos_trades"]
-        and out_sample["expectancy_r"] > GATES["min_oos_expectancy_r"]
-        and out_sample["max_drawdown_r"] >= GATES["max_oos_drawdown_r"]
-    )
+    double_cost = summarize(run_orb(test, replace(cfg, cost_r=DOUBLE_COST_R)))
+
+    first_half, second_half = split_by_day(df, cfg, train_fraction=0.5)
+    halves = [summarize(run_orb(first_half, cfg)), summarize(run_orb(second_half, cfg))]
+
+    all_trades = run_orb(df, cfg)
+    years = {y: summarize([t for t in all_trades if t.day[:4] == y])
+             for y in sorted({t.day[:4] for t in all_trades})}
+
+    positive_halves = sum(1 for h in halves if h["trades"] > 0 and h["expectancy_r"] > 0)
+    positive_years = sum(1 for y in years.values() if y["trades"] > 0 and y["expectancy_r"] > 0)
+    checks = {
+        "oos_trades": out_sample["trades"] >= GATES["min_oos_trades_per_symbol"],
+        "oos_expectancy": out_sample["expectancy_r"] >= GATES["min_oos_expectancy_r"],
+        "oos_expectancy_double_cost": double_cost["expectancy_r"] >= GATES["min_oos_expectancy_double_cost_r"],
+        "both_halves_positive": positive_halves >= GATES["min_positive_halves"],
+        "enough_years": len(years) >= GATES["min_years"],
+        "positive_years": positive_years >= GATES["min_positive_years"],
+        "oos_drawdown": out_sample["max_drawdown_r"] >= GATES["max_oos_drawdown_r"],
+    }
     return {
         "symbol": symbol,
         "variant": variant,
         "in_sample": in_sample,
         "out_of_sample": out_sample,
-        "passed_gates": bool(passed),
+        "out_of_sample_double_cost": double_cost,
+        "halves": halves,
+        "per_year": years,
+        "checks": checks,
+        "passed_gates": all(checks.values()),
     }
 
 
