@@ -1,0 +1,50 @@
+name: orb-research
+
+# Manual only. This workflow has no schedule and cannot place orders.
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated symbols"
+        default: "GLD,SPY"
+        type: string
+      lookback_days:
+        description: "How many calendar days of 5-minute bars to test"
+        default: "730"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Walk-forward report (read-only)
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          SYMBOLS: ${{ inputs.symbols }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days }}
+        run: python -m research.run_orb_research
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: orb-research-${{ github.run_id }}
+          path: research/results/
+          retention-days: 90
