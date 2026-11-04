@@ -1,0 +1,84 @@
+{
+  "sources": [
+    {
+      "path": "data/XAUUSD_5m.csv",
+      "raw_rows": 175649,
+      "normalized_rows": 175649,
+      "duplicates_within_source": 0,
+      "first_timestamp": "2023-01-02 00:00:00+00:00",
+      "last_timestamp": "2024-12-31 21:55:00+00:00",
+      "first_close": 1826.637,
+      "last_close": 2624.255,
+      "price_basis_hint": "unspecified"
+    },
+    {
+      "path": "data/xauusd_2020_2022.csv",
+      "raw_rows": 263220,
+      "normalized_rows": 263220,
+      "duplicates_within_source": 0,
+      "first_timestamp": "2020-01-01 00:00:00+00:00",
+      "last_timestamp": "2022-12-30 21:55:00+00:00",
+      "first_close": 1519.895,
+      "last_close": 1823.463,
+      "price_basis_hint": "unspecified"
+    },
+    {
+      "path": "data/xauusd_2025_2026.csv",
+      "raw_rows": 161070,
+      "normalized_rows": 161070,
+      "duplicates_within_source": 0,
+      "first_timestamp": "2025-01-01 00:00:00+00:00",
+      "last_timestamp": "2026-10-30 20:55:00+00:00",
+      "first_close": 2625.048,
+      "last_close": 3874.585,
+      "price_basis_hint": "unspecified"
+    }
+  ],
+  "overlaps": [
+    {
+      "left": "data/XAUUSD_5m.csv",
+      "right": "data/xauusd_2020_2022.csv",
+      "overlap_rows": 0
+    },
+    {
+      "left": "data/XAUUSD_5m.csv",
+      "right": "data/xauusd_2025_2026.csv",
+      "overlap_rows": 0
+    },
+    {
+      "left": "data/xauusd_2020_2022.csv",
+      "right": "data/xauusd_2025_2026.csv",
+      "overlap_rows": 0
+    }
+  ],
+  "overlap_rows_total": 0,
+  "price_basis_hints": [
+    "unspecified"
+  ],
+  "price_basis_status": "UNVERIFIED: no bid/ask metadata and no overlapping timestamps",
+  "price_basis_flagged": true,
+  "merged_rows_before_dedup": 599939,
+  "dropped_duplicate_rows": 0,
+  "merged_rows": 599939,
+  "first_timestamp": "2020-01-01 00:00:00+00:00",
+  "last_timestamp": "2026-10-30 20:55:00+00:00",
+  "first_date": "2020-01-01",
+  "last_date": "2026-10-30",
+  "all_timestamps_utc": true,
+  "all_on_5m_grid": true,
+  "duplicate_timestamps_after_merge": 0,
+  "existing_output": "data/XAUUSD_full_5m.csv",
+  "existing_comparison": {
+    "same_index": true,
+    "same_columns": true,
+    "left_rows": 599939,
+    "right_rows": 599939,
+    "identical": true,
+    "max_ohlc_difference": 0.0,
+    "max_close_difference": 0.0,
+    "max_volume_difference": 0.0,
+    "different_ohlc_rows": 0,
+    "different_volume_rows": 0
+  },
+  "output": "data/XAUUSD_full_5m.csv"
+}

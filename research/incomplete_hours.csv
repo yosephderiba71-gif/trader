@@ -1,0 +1,65 @@
+timestamp,bars,date,weekday,calendar_status,early_close_date,early_close
+2020-03-30T05:00:00Z,11,2020-03-30,Monday,regular day,no,no
+2020-04-15T03:00:00Z,10,2020-04-15,Wednesday,regular day,no,no
+2020-04-15T04:00:00Z,11,2020-04-15,Wednesday,regular day,no,no
+2020-04-20T22:00:00Z,11,2020-04-20,Monday,regular day,no,no
+2020-05-06T04:00:00Z,10,2020-05-06,Wednesday,regular day,no,no
+2020-05-07T01:00:00Z,11,2020-05-07,Thursday,regular day,no,no
+2020-05-07T03:00:00Z,11,2020-05-07,Thursday,regular day,no,no
+2020-06-24T04:00:00Z,11,2020-06-24,Wednesday,regular day,no,no
+2020-07-06T01:00:00Z,11,2020-07-06,Monday,regular day,no,no
+2020-07-17T05:00:00Z,11,2020-07-17,Friday,regular day,no,no
+2020-09-29T22:00:00Z,11,2020-09-29,Tuesday,regular day,no,no
+2020-11-27T18:00:00Z,9,2020-11-27,Friday,early-close date (derived),yes,yes
+2020-12-24T18:00:00Z,9,2020-12-24,Thursday,early-close date (derived),yes,yes
+2021-06-29T23:00:00Z,11,2021-06-29,Tuesday,regular day,no,no
+2021-11-25T23:00:00Z,9,2021-11-25,Thursday,full holiday (supplied),no,no
+2021-11-26T18:00:00Z,9,2021-11-26,Friday,early-close date (derived),yes,yes
+2022-02-21T19:00:00Z,6,2022-02-21,Monday,full holiday (supplied),no,no
+2022-05-30T18:00:00Z,6,2022-05-30,Monday,full holiday (supplied),no,no
+2022-06-20T18:00:00Z,6,2022-06-20,Monday,full holiday (supplied),no,no
+2022-07-04T18:00:00Z,6,2022-07-04,Monday,full holiday (supplied),no,no
+2022-09-05T18:00:00Z,6,2022-09-05,Monday,full holiday (supplied),no,no
+2022-10-18T15:00:00Z,11,2022-10-18,Tuesday,regular day,no,no
+2022-11-24T19:00:00Z,6,2022-11-24,Thursday,full holiday (supplied),no,no
+2022-11-25T18:00:00Z,9,2022-11-25,Friday,early-close date (derived),yes,yes
+2023-02-20T19:00:00Z,6,2023-02-20,Monday,full holiday (supplied),no,no
+2023-05-29T18:00:00Z,6,2023-05-29,Monday,full holiday (supplied),no,no
+2023-06-19T18:00:00Z,6,2023-06-19,Monday,full holiday (supplied),no,no
+2023-07-04T18:00:00Z,6,2023-07-04,Tuesday,full holiday (supplied),no,no
+2023-09-04T18:00:00Z,6,2023-09-04,Monday,full holiday (supplied),no,no
+2023-11-23T18:00:00Z,6,2023-11-23,Thursday,full holiday (supplied),no,no
+2023-11-24T17:00:00Z,9,2023-11-24,Friday,early-close date (derived),yes,yes
+2024-01-15T19:00:00Z,6,2024-01-15,Monday,full holiday (supplied),no,no
+2024-02-18T23:00:00Z,10,2024-02-18,Sunday,regular day,no,no
+2024-02-19T19:00:00Z,6,2024-02-19,Monday,full holiday (supplied),no,no
+2024-05-27T18:00:00Z,6,2024-05-27,Monday,full holiday (supplied),no,no
+2024-06-19T18:00:00Z,6,2024-06-19,Wednesday,full holiday (supplied),no,no
+2024-07-04T18:00:00Z,6,2024-07-04,Thursday,full holiday (supplied),no,no
+2024-09-02T18:00:00Z,6,2024-09-02,Monday,full holiday (supplied),no,no
+2024-10-09T23:00:00Z,2,2024-10-09,Wednesday,regular day,no,no
+2024-10-10T00:00:00Z,10,2024-10-10,Thursday,regular day,no,no
+2024-11-28T19:00:00Z,6,2024-11-28,Thursday,full holiday (supplied),no,no
+2024-11-29T19:00:00Z,9,2024-11-29,Friday,early-close date (derived),yes,yes
+2024-12-24T18:00:00Z,9,2024-12-24,Tuesday,early-close date (derived),yes,yes
+2024-12-26T23:00:00Z,11,2024-12-26,Thursday,regular day,no,no
+2025-01-19T23:00:00Z,11,2025-01-19,Sunday,regular day,no,no
+2025-01-20T19:00:00Z,6,2025-01-20,Monday,full holiday (supplied),no,no
+2025-02-17T19:00:00Z,6,2025-02-17,Monday,full holiday (supplied),no,no
+2025-03-03T10:00:00Z,8,2025-03-03,Monday,regular day,no,no
+2025-04-24T22:00:00Z,11,2025-04-24,Thursday,regular day,no,no
+2025-04-29T22:00:00Z,11,2025-04-29,Tuesday,regular day,no,no
+2025-05-26T18:00:00Z,6,2025-05-26,Monday,full holiday (supplied),no,no
+2025-06-19T18:00:00Z,6,2025-06-19,Thursday,full holiday (supplied),no,no
+2025-08-07T23:00:00Z,11,2025-08-07,Thursday,regular day,no,no
+2025-09-01T18:00:00Z,6,2025-09-01,Monday,full holiday (supplied),no,no
+2025-11-27T19:00:00Z,6,2025-11-27,Thursday,full holiday (supplied),no,no
+2025-11-28T08:00:00Z,11,2025-11-28,Friday,early-close date (derived),yes,no
+2025-11-28T19:00:00Z,9,2025-11-28,Friday,early-close date (derived),yes,yes
+2025-12-07T23:00:00Z,9,2025-12-07,Sunday,regular day,no,no
+2025-12-24T18:00:00Z,9,2025-12-24,Wednesday,early-close date (derived),yes,yes
+2026-01-19T19:00:00Z,6,2026-01-19,Monday,full holiday (supplied),no,no
+2026-02-01T23:00:00Z,11,2026-02-01,Sunday,regular day,no,no
+2026-02-16T19:00:00Z,6,2026-02-16,Monday,full holiday (supplied),no,no
+2026-05-25T18:00:00Z,6,2026-05-25,Monday,full holiday (supplied),no,no
+2026-09-07T18:00:00Z,6,2026-09-07,Monday,full holiday (supplied),no,no
