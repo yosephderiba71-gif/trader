@@ -28,6 +28,17 @@ def _format(value: float | None, digits: int = 4) -> str:
     return f"{value:.{digits}f}"
 
 
+def _set_data_metadata(report: dict[str, Any], data_file: Path) -> None:
+    metadata = report["metadata"]
+    metadata["data_file"] = str(data_file)
+    metadata["data_notes"] = [
+        f"Source file: {data_file}; actual coverage {metadata['actual_start']} to {metadata['actual_end']}.",
+        f"Rules file is frozen and still names data/XAUUSD_5m.csv; this run uses {data_file} as directed.",
+        f"Removed {metadata['flat_padding_removed']} synthetic flat five-minute padding bars.",
+        f"Dropped {metadata['incomplete_hours_dropped']} incomplete one-hour bars.",
+    ]
+
+
 def _print_metadata(report: dict[str, Any]) -> None:
     metadata = report["metadata"]
     print(
@@ -92,6 +103,7 @@ def main() -> None:
 
     if args.stage == "in-sample":
         report = run_research(five_min, include_out_of_sample=False)
+        _set_data_metadata(report, args.data_file)
         _print_metadata(report)
         print("IN-SAMPLE")
         _print_metrics("IN-SAMPLE", report["in_sample"]["metrics"])
@@ -99,6 +111,7 @@ def main() -> None:
         return
 
     report = run_research(five_min, include_out_of_sample=True)
+    _set_data_metadata(report, args.data_file)
     _print_metadata(report)
     if args.stage == "all":
         print("IN-SAMPLE")
