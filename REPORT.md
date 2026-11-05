@@ -3881,6 +3881,15 @@ Trials so far (appended):
 | — | Heikin Ashi swing | XAUUSD full 2020-2026 | Rejected |
 | 19 | RSI(2) SPY/QQQ | SPY/QQQ | Rejected (P4) |
 
+### Random baseline numbers (documented with the rejection)
+
+Random baseline for each asset: 1,000 random strategies over the out-of-sample window, each entering on random days and holding sampled real holding periods; baseline = 95th percentile of the 1,000 run expectancies (all at base costs, 5 bp per side).
+
+- SPY: runs=1000, baseline 95th percentile = 0.5500% per trade mean expectancy; real OOS expectancy at base costs = 0.4399%. Real OOS expectancy (0.4399%) was therefore NOT above the baseline (0.5500%) -> P4 = False.
+- QQQ: runs=1000, baseline 95th percentile = 0.4631% per trade mean expectancy; real OOS expectancy at base costs = 0.3947%. Real OOS expectancy (0.3947%) was therefore NOT above the baseline (0.4631%) -> P4 = False.
+
+Rejection summary (frozen task): both SPY and QQQ FAIL P4; both otherwise PASS P1, P2, P3, P5, P6, P7. Verdict: REJECTED.
+
 ### Anything that looks wrong
 
 - The pass criteria implemented here follow the user's frozen task text (P1 stress > 0, P2 base >= 0.20%, P3 full-history trades >= 100, P4 vs random baseline, P5 both chronological halves, P6 OOS drawdown >= -20%, P7 >= 60% of calendar years positive), which differ in places from the earlier `research/rsi2_rules.md` wording (there: PF >= 1.2 and positive SPY/QQQ separately). The frozen task text was treated as authoritative and implemented as written; the rules file was not edited.
@@ -3889,3 +3898,71 @@ Trials so far (appended):
 - The loader trims the analysis window to `start=2000-01-01` for SPY and no start for QQQ, and `end=2026-11-05` (UTC midnight) for both, which keeps the last complete day (`2026-11-04`) and drops the incomplete `2026-11-05` bar.
 - Yahoo Finance daily fetches via yfinance were transiently failing during the run (empty frames with "possibly delisted"); the run was retried until both symbols returned bars.
 - No lint or typecheck tool is installed in the active environment (no ruff/mypy module available); only pytest was run.
+
+## Intraday Meta-Strategy backtest: frozen rules (2026-11-05)
+
+### Files read for this task
+
+- `AGENTS.md`
+- `TASKS.md`
+- `REPORT.md`
+- `research/rsi2_spyqqq.py`
+- `research/run_rsi2_spyqqq.py`
+- `intraday_bot/strategy.py`
+- `intraday_bot/bands.py`
+- `intraday_bot/config.py`
+- `intraday_bot/backtest.py`
+- `intraday_bot/runner.py`
+- `trader/strategies.py`
+
+### Files created
+
+- `research/meta_strategy_rules.md`
+- `research/run_meta_backtest.py`
+- `research/meta_backtest_report.json`
+
+### Commands and full output
+
+Command (from repo root, quantstats venv):
+
+```text
+/Users/yosi/venvs/quantstats/bin/python -m research.run_meta_backtest
+```
+
+Full output:
+
+```text
+report=research/meta_backtest_report.json
+windows=56 switches=30
+```
+
+Full suite re-run (from repo root, quantstats venv):
+
+```text
+/Users/yosi/venvs/quantstats/bin/python -m pytest -q
+```
+
+Full output:
+
+```text
+..............................................................................                                        [100%]
+182 passed in 19.81s
+```
+
+### Results
+
+Frozen meta-strategy run (5 assets SPY, QQQ, TSLA, AAPL, BTC-USD; 15-minute bars; 30-day lookback; 7-day trading window; 1% stop, 2% take-profit; 10bp cost; 1,000-run random baseline).
+
+- Windows evaluated: 56 (5 assets x rolling 7-day windows over the available 15-minute history).
+- Strategy switches between windows: 30.
+- Final window: asset `BTC-USD`, strategy `ma_crossover`, window `2026-10-26` -> `2026-11-02`.
+- Final window metrics: net profit 3.44%, total return 2.73%, trades 5, win rate 0.60, expectancy 0.55%, max drawdown -1.57%.
+- Final random baseline (1,000 runs, same trade count and holding times): 95th percentile 2.51%, mean 0.02%.
+- Final expectancy 0.55% was below the random-baseline 95th percentile of 2.51%.
+
+### Anything that looks wrong
+
+- Yahoo Finance 15-minute history is capped at roughly 60 days, so the intended multi-year roll-forward window could only be evaluated over approximately 2026-08-13 -> 2026-11-05 (stocks) and 2026-09-07 -> 2026-11-05 (BTC-USD). The "until the end of the data (approx. 2022-2026)" plan was therefore not achievable with this data source.
+- Most evaluated windows produced zero trades; only the final window produced trades (5 for BTC-USD).
+- A strategy with zero trades was treated as net profit 0 for selection purposes, which can dominate the best-combination pick.
+- No lint or typecheck tool is installed in the active environment; only pytest was run.
