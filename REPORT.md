@@ -3443,7 +3443,7 @@ Supplied dates by year:
 - All three have numeric epoch-ms timestamps and `timestamp,open,high,low,close`; none has volume. The merge script verifies raw timestamps are UTC, parses to UTC, checks the 5-minute grid, normalizes to `open,high,low,close,volume` with `volume=0.0`, and writes ISO `Z` timestamps.
 - Overlaps: 0 rows between any pair; duplicates within each source: 0. Duplicate precedence, if any existed, is `data/XAUUSD_5m.csv` first, then `data/xauusd_2020_2022.csv`, then `data/xauusd_2025_2026.csv`. The merged result has 599,939 rows, first `2020-01-01T00:00:00Z`, last `2026-10-30T20:55:00Z`.
 - The merged frame was compared with the existing `data/XAUUSD_full_5m.csv`: same index, same columns, max OHLC difference 0.0, max volume difference 0.0, 0 different rows. The output was therefore rewritten identically; source files were not modified.
-- Price basis: **UNVERIFIED / FLAGGED**. No source has Bid/Ask metadata, no filename/column contains `bid` or `ask`, and there are no overlapping timestamps to compare. Boundary close changes are 1823.463 -> 1826.637 (2022/2023) and 2624.255 -> 2625.048 (2024/2025), but these are ordinary adjacent-session gaps and are not evidence of a bid/ask difference. The script does not claim the bases match; it prints the flag and writes `research/merge_xauusd_full_report.json`.
+- Price basis: **BID**. The three downloaded XAUUSD gold source files are bid-price exports; original filenames begin `xauusd-m5-bid-` (e.g. `xauusd-m5-bid-2020-01-01-2023-01-01.csv` and `xauusd-m5-bid-2025-01-01-2026-10-31.csv`). No source has Bid/Ask metadata and there are no overlapping timestamps to compare, but the download filenames establish the bid basis. Boundary close changes are 1823.463 -> 1826.637 (2022/2023) and 2624.255 -> 2625.048 (2024/2025), but these are ordinary adjacent-session gaps and are not evidence of a different basis. The merge script still prints a metadata flag because no Bid/Ask column exists; that flag is superseded by the filename basis.
 - If the merged frame ever differs from the existing full file, the script writes a candidate to `research/XAUUSD_full_5m_candidate.csv` and raises instead of overwriting. The first dry run did this because the comparison included the internal `_source_index` column; after restricting the comparison to OHLCV, the rerun was identical and wrote the output.
 
 ### Strict `check_data.py`
@@ -3750,7 +3750,31 @@ Read-only `sed`/`ls`/`head`/`tail` inspections were used for the files below; th
 - The supplied NYSE list has full-day holidays only. The 6 remaining non-break unknown runs are day-after-Thanksgiving early-close dates; they were not labeled `Holiday/Early Close` because those dates are not in the supplied list. They are listed above and in `research/gap_report_remaining_unknown.csv`.
 - The 4 extra Friday full-holiday runs were labeled beyond the 91 target hours because every hour in them is on a supplied date. This is why `Holiday/Early Close` has 46 runs, not 42.
 - `research/gap_report.py` still uses the older four-holiday windows. Rerunning it alone overwrites `research/gap_report.csv` and loses the official-calendar labels; run `research/relabel_gap_report.py` afterward.
-- Price basis for the three XAUUSD sources remains unverified. The merge is flagged, not silently assumed to be Bid or Ask. There are no overlapping timestamps to compare.
+- Price basis for the three XAUUSD sources is **BID**: the downloaded source filenames begin `xauusd-m5-bid-`. The merge script still flags missing Bid/Ask metadata, but the filename basis is bid; there are no overlapping timestamps to compare.
 - The first merge dry run failed because the comparison included the internal `_source_index` column; after restricting the comparison to OHLCV, the rerun was identical. The failed candidate file was removed.
 - The relabel script was rerun after making its extra-label pass idempotent; the output was identical (1,771 runs, 2,347 hours, 46 `Holiday/Early Close`, 1,694 unknown).
 - No git commands, strategy runs, package installs, or source-data edits were performed. `data/XAUUSD_full_5m.csv` was rewritten by the merge script and verified identical to its previous OHLCV content.
+
+## Additional documentation updates
+
+### Price basis correction
+The three downloaded XAUUSD gold source files are bid prices. Original filenames begin `xauusd-m5-bid-` (e.g. `xauusd-m5-bid-2020-01-01-2023-01-01.csv`, `xauusd-m5-bid-2025-01-01-2026-10-31.csv`). Prior `UNVERIFIED` price-basis wording in REPORT.md was replaced with **BID**; the merge script still flags missing Bid/Ask metadata because no column/metadata exists.
+
+### Heikin Ashi re-test on 6 years: REJECTED
+The frozen HA rules were re-tested by reading `data/XAUUSD_full_5m.csv` with synthetic flat padding removed in code, then aggregating to complete UTC one-hour bars (exactly 12 five-minute bars per hour) and splitting 70/30 by whole UTC day. The frozen rules file still names `data/XAUUSD_5m.csv`; this run used the full file as directed.
+
+- Out-of-sample (637 days, 2024-10-13 22:00 -> 2026-10-30 20:00): 1,456 trades; expectancy -0.22R at 10 bp (-0.21791729364465823R) and -0.47R at 20 bp (-0.4665246925255604R); gross avg R +0.03 (+0.030690105236243978R); buy-and-hold +46.2% (+46.20716850341407%).
+- In-sample (1,484 days, 2020-01-01 23:00 -> 2024-10-11 20:00): 3,416 trades; expectancy -0.36R at 10 bp (-0.362697428432578R) and -0.73R at 20 bp (-0.7290140184421976R).
+- Result: rejected after costs. No strategy logic, 10-period average, exit rules, tuning, or re-parameterization was changed.
+
+### Trials so far
+| Trial | Strategy/variant | Market | Status |
+|---|---|---|---|
+| A-H | Gold variants A-H | XAUUSD/gold | Rejected |
+| I | Gold variant I | XAUUSD bid 2020-2026 | Rejected |
+| J | Gold variant J | GC=F futures | Rejected |
+| K | Gold variant K | GC=F futures | Rejected |
+| — | Heikin Ashi swing | XAUUSD full 2020-2026 | Rejected |
+| 19 | RSI(2) SPY/QQQ | SPY/QQQ | Pending |
+
+research/rsi2_rules.md was not created because the exact rules text was not supplied between the `===== BEGIN RULES =====` and `===== END RULES =====` markers; it will be created verbatim when provided.
