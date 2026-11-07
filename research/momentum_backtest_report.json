@@ -1,0 +1,67 @@
+{
+  "strategy": "multi_asset_time_series_momentum",
+  "rules_file": "research/momentum_rules.md",
+  "universe": [
+    "SPY",
+    "TLT",
+    "GLD"
+  ],
+  "cost_bps_per_trade": 10.0,
+  "rebalance_frequency": "first_trading_day_of_each_month",
+  "data": {
+    "source": "yfinance",
+    "auto_adjust": true,
+    "first_date": "2004-11-18",
+    "last_date": "2026-11-06",
+    "common_trading_days": 5527,
+    "backtest_start": "2005-10-03",
+    "backtest_end": "2026-11-06",
+    "backtest_observations": 5308,
+    "is_start": "2005-10-03",
+    "is_end": "2020-07-08",
+    "is_daily_returns": 3715,
+    "oos_start": "2020-07-08",
+    "oos_end": "2026-11-06",
+    "oos_daily_returns": 1592,
+    "rebalance_count_total": 254,
+    "rebalance_count_is": 178,
+    "rebalance_count_oos": 76
+  },
+  "in_sample": {
+    "total_return_pct": 352.0419,
+    "cagr_pct": 10.7596,
+    "max_drawdown_pct": -18.3093,
+    "trade_count": 178,
+    "win_rate": 0.6460674157303371,
+    "asset_order_count": 371
+  },
+  "out_of_sample": {
+    "total_return_pct": 44.4407,
+    "cagr_pct": 5.9809,
+    "max_drawdown_pct": -19.6627,
+    "trade_count": 72,
+    "win_rate": 0.6111111111111112,
+    "asset_order_count": 150
+  },
+  "buy_and_hold_spy_oos_return_pct": 153.1525,
+  "random_baseline": {
+    "runs": 1000,
+    "seed": 20261107,
+    "p95_return_pct": 61.0159,
+    "mean_return_pct": 33.5918,
+    "median_return_pct": 32.7786,
+    "p05_return_pct": 8.9129,
+    "std_return_pct": 15.8932,
+    "strategy_percentile": 75.5
+  },
+  "strategy_beat_random_baseline": false,
+  "definitions": {
+    "trade_count": "OOS monthly rebalance trades with non-zero turnover, counted by rebalance date.",
+    "win_rate": "Share of counted monthly rebalance trades with a positive return over the following holding period.",
+    "max_drawdown_pct": "Peak-to-trough drawdown as a negative percentage.",
+    "cagr_pct": "Calendar-day compound annual growth rate.",
+    "cost_model": "10bp applied to one-way turnover (sum of absolute asset-weight changes).",
+    "signal_timing": "Signals use closes through the rebalance date; new weights earn the next day's return. No lookahead.",
+    "random_baseline": "1000 random monthly weight schedules drawn from Dirichlet(1,1,1,1) over SPY/TLT/GLD/cash on the same OOS dates and cost model."
+  }
+}

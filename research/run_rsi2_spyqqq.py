@@ -67,7 +67,9 @@ def _evaluate_symbol(symbol: str, bars: pd.DataFrame) -> dict[str, Any]:
         [float(trade.held_days) for trade in oos_trades if trade.exit_index is not None],
         dtype=float,
     )
-    baseline = random_baseline(bars, oos_entry_indices, oos_held, BASE_COST_BPS)
+    baseline = random_baseline(
+        bars, oos_entry_indices, oos_held, BASE_COST_BPS, real_expectancy=float(oos_metrics["expectancy_pct"])
+    )
 
     half_one_metrics = summarize(half_one_trades, BASE_COST_BPS)
     half_two_metrics = summarize(half_two_trades, BASE_COST_BPS)
@@ -96,7 +98,11 @@ def _evaluate_symbol(symbol: str, bars: pd.DataFrame) -> dict[str, Any]:
         "P1": bool(oos_metrics_stress["expectancy_pct"] > 0.0),
         "P2": bool(oos_metrics["expectancy_pct"] >= 0.20),
         "P3": bool(len(trades) >= 100),
-        "P4": bool(oos_metrics["expectancy_pct"] > baseline["baseline_pct"]),
+        "P4": bool(
+            oos_metrics["expectancy_pct"] > baseline["baseline_pct"]
+            and baseline["p_value"] is not None
+            and baseline["p_value"] <= 0.05
+        ),
         "P5": bool(half_one_metrics["expectancy_pct"] > 0.0 and half_two_metrics["expectancy_pct"] > 0.0),
         "P6": bool(oos_metrics["max_drawdown_pct"] >= -20.0),
         "P7": bool(year_fraction >= 0.60),
@@ -143,7 +149,13 @@ def _evaluate_symbol(symbol: str, bars: pd.DataFrame) -> dict[str, Any]:
         "out_of_sample_baseline": {
             "runs": baseline["runs"],
             "percentile": baseline["baseline_pct"],
-            "mean_pct": baseline["expectancy_pct"],
+            "mean_pct": baseline["mean_pct"],
+            "median_pct": baseline["median_pct"],
+            "p05_pct": baseline["p05_pct"],
+            "p95_pct": baseline["p95_pct"],
+            "std_pct": baseline["std_pct"],
+            "p_value": baseline["p_value"],
+            "expectancies_pct": baseline["expectancies_pct"],
         },
         "halves": {
             "first": {
@@ -180,6 +192,7 @@ def main() -> int:
             f"oos_expectancy_stress={stress['expectancy_pct']:.4f} "
             f"oos_max_dd={oos['max_drawdown_pct']:.4f} "
             f"baseline_95th={baseline['percentile']:.4f} "
+            f"baseline_p_value={baseline['p_value']:.4f} "
             f"passes={report['passes']}"
         )
     REPORT_PATH.write_text(json.dumps(reports, indent=2, default=str) + "\n", encoding="utf-8")

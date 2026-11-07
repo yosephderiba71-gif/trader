@@ -3966,3 +3966,153 @@ Frozen meta-strategy run (5 assets SPY, QQQ, TSLA, AAPL, BTC-USD; 15-minute bars
 - Most evaluated windows produced zero trades; only the final window produced trades (5 for BTC-USD).
 - A strategy with zero trades was treated as net profit 0 for selection purposes, which can dominate the best-combination pick.
 - No lint or typecheck tool is installed in the active environment; only pytest was run.
+
+## Multi-Asset Momentum backtest: frozen rules (2026-11-07)
+
+### Files read for this task
+
+- `AGENTS.md`
+- `TASKS.md`
+- `REPORT.md`
+- `research/momentum_rules.md`
+- `momentum_bot/signals.py`
+- `momentum_bot/rebalance.py`
+- `momentum_bot/trade.py`
+- `tests/test_momentum.py`
+- `research/rsi2_spyqqq.py`
+- `research/run_rsi2_spyqqq.py`
+
+### Files created
+
+- `research/run_momentum_backtest.py`
+- `research/momentum_backtest_report.json`
+
+### Commands and full output
+
+Command (from repo root, quantstats venv):
+
+```text
+/Users/yosi/venvs/quantstats/bin/python -m research.run_momentum_backtest
+```
+
+Full output (the command also emitted repeated yfinance/Pandas4 deprecation warnings for `DataFrame.drop`, `rename`, `sort_index`, and `set_index`; these are third-party warnings and do not affect the results):
+
+```json
+{
+  "strategy": "multi_asset_time_series_momentum",
+  "rules_file": "research/momentum_rules.md",
+  "universe": [
+    "SPY",
+    "TLT",
+    "GLD"
+  ],
+  "cost_bps_per_trade": 10.0,
+  "rebalance_frequency": "first_trading_day_of_each_month",
+  "data": {
+    "source": "yfinance",
+    "auto_adjust": true,
+    "first_date": "2004-11-18",
+    "last_date": "2026-11-06",
+    "common_trading_days": 5527,
+    "backtest_start": "2005-10-03",
+    "backtest_end": "2026-11-06",
+    "backtest_observations": 5308,
+    "is_start": "2005-10-03",
+    "is_end": "2020-07-08",
+    "is_daily_returns": 3715,
+    "oos_start": "2020-07-08",
+    "oos_end": "2026-11-06",
+    "oos_daily_returns": 1592,
+    "rebalance_count_total": 254,
+    "rebalance_count_is": 178,
+    "rebalance_count_oos": 76
+  },
+  "in_sample": {
+    "total_return_pct": 352.0419,
+    "cagr_pct": 10.7596,
+    "max_drawdown_pct": -18.3093,
+    "trade_count": 178,
+    "win_rate": 0.6460674157303371,
+    "asset_order_count": 371
+  },
+  "out_of_sample": {
+    "total_return_pct": 44.4407,
+    "cagr_pct": 5.9809,
+    "max_drawdown_pct": -19.6627,
+    "trade_count": 72,
+    "win_rate": 0.6111111111111112,
+    "asset_order_count": 150
+  },
+  "buy_and_hold_spy_oos_return_pct": 153.1525,
+  "random_baseline": {
+    "runs": 1000,
+    "seed": 20261107,
+    "p95_return_pct": 61.0159,
+    "mean_return_pct": 33.5918,
+    "median_return_pct": 32.7786,
+    "p05_return_pct": 8.9129,
+    "std_return_pct": 15.8932,
+    "strategy_percentile": 75.5
+  },
+  "strategy_beat_random_baseline": false,
+  "definitions": {
+    "trade_count": "OOS monthly rebalance trades with non-zero turnover, counted by rebalance date.",
+    "win_rate": "Share of counted monthly rebalance trades with a positive return over the following holding period.",
+    "max_drawdown_pct": "Peak-to-trough drawdown as a negative percentage.",
+    "cagr_pct": "Calendar-day compound annual growth rate.",
+    "cost_model": "10bp applied to one-way turnover (sum of absolute asset-weight changes).",
+    "signal_timing": "Signals use closes through the rebalance date; new weights earn the next day's return. No lookahead.",
+    "random_baseline": "1000 random monthly weight schedules drawn from Dirichlet(1,1,1,1) over SPY/TLT/GLD/cash on the same OOS dates and cost model."
+  }
+}
+```
+
+Sanity check of signal targets at selected dates (read-only):
+
+```text
+first_rebalance: 2005-10-03 targets: {'SPY': 0.5, 'GLD': 0.5, 'CASH': 0.0}
+2008-10-01 targets: {'TLT': 0.5, 'CASH': 0.5}
+2020-04-01 targets: {'GLD': 0.5, 'TLT': 0.5, 'CASH': 0.0}
+2020-07-01 targets: {'GLD': 0.5, 'SPY': 0.5, 'CASH': 0.0}
+2026-11-02 targets: {'SPY': 0.5, 'CASH': 0.5}
+```
+
+Momentum unit tests (re-run after the backtester was added):
+
+```text
+/Users/yosi/venvs/quantstats/bin/python -m pytest -q tests/test_momentum.py
+..............                                                           [100%]
+14 passed in 5.32s
+```
+
+Repeat-run determinism check (same backtest command, then compare the two JSON reports):
+
+```text
+deterministic: False
+diff: out_of_sample {'total_return_pct': 44.4408, 'cagr_pct': 5.9809, 'max_drawdown_pct': -19.6627, 'trade_count': 72, 'win_rate': 0.6111111111111112, 'asset_order_count': 150} {'total_return_pct': 44.4407, 'cagr_pct': 5.9809, 'max_drawdown_pct': -19.6627, 'trade_count': 72, 'win_rate': 0.6111111111111112, 'asset_order_count': 150}
+diff: random_baseline {'runs': 1000, 'seed': 20261107, 'p95_return_pct': 61.016, 'mean_return_pct': 33.5918, 'median_return_pct': 32.7786, 'p05_return_pct': 8.9128, 'std_return_pct': 15.8932, 'strategy_percentile': 75.5} {'runs': 1000, 'seed': 20261107, 'p95_return_pct': 61.0159, 'mean_return_pct': 33.5918, 'median_return_pct': 32.7786, 'p05_return_pct': 8.9129, 'std_return_pct': 15.8932, 'strategy_percentile': 75.5}
+```
+
+The only repeat-run differences were 4th-decimal changes from a fresh yfinance download; trade counts, win rates, drawdowns, and the verdict were unchanged.
+
+### Results
+
+Frozen multi-asset time-series momentum run (SPY, TLT, GLD; `Close > SMA200`; top 2 by 60-day return; inverse-vol weights; 50% cap; monthly first-trading-day rebalance; 10bp one-way turnover; 70/30 chronological split; 1,000 random `Dirichlet(1,1,1,1)` schedules over SPY/TLT/GLD/cash on the same OOS dates and costs; seed 20261107).
+
+- Signal source: `momentum_bot.signals.compute_target_weights` (imported directly; no duplicated signal logic).
+- Data: yfinance auto-adjusted daily bars, 2004-11-18 -> 2026-11-06; 5,527 common trading days; backtest 2005-10-03 -> 2026-11-06 (5,308 observations).
+- In-sample (2005-10-03 -> 2020-07-08): total return 352.04%, CAGR 10.76%, max drawdown -18.31%, trade count 178, win rate 64.61%, asset orders 371.
+- Out-of-sample (2020-07-08 -> 2026-11-06): total return 44.44%, CAGR 5.98%, max drawdown -19.66%, trade count 72, win rate 61.11%, asset orders 150.
+- SPY buy-and-hold OOS return (auto-adjusted): 153.15%.
+- Random baseline (1,000 runs, seed 20261107): 95th percentile 61.02%, mean 33.59%, median 32.78%, 5th percentile 8.91%, standard deviation 15.89%; strategy percentile 75.5.
+- `strategy_beat_random_baseline`: **false**.
+- Verdict: **REJECTED for live deployment.** The strategy's OOS return (44.44%) is below the random-baseline 95th percentile (61.02%) and far below SPY buy-and-hold (153.15%). It beat 75.5% of random schedules, but the frozen gauntlet requires beating the 95th percentile. The strategy was not tuned after seeing these results.
+
+### Anything that looks wrong
+
+- The OOS period (2020-07-08 -> 2026-11-06) was a strong SPY-led bull market; the 50% asset cap and cash/TLT/GLD allocations limited upside. This is a plausible explanation for the underperformance, not a reason to relax the gauntlet.
+- The strategy's OOS max drawdown (-19.66%) is moderate, but the pre-live test is return-based; lower drawdown does not compensate for failing the return thresholds.
+- The OOS start (2020-07-08) is not a monthly rebalance date. Both the strategy and the random baseline start from that date without an initial trade, then rebalance on the same monthly dates. This keeps the comparison fair.
+- A repeat run differed only in the 4th decimal of OOS total return and baseline p95 due to a fresh yfinance download; the verdict is unchanged.
+- yfinance emitted Pandas4Warning deprecation messages under pandas 3.1 for `DataFrame.drop`, `rename`, `sort_index`, and `set_index`; these are third-party warnings and did not affect results.
+- No lint or typecheck tool is installed in the active environment; only pytest was run.

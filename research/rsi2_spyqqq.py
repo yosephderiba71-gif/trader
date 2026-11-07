@@ -195,38 +195,111 @@ def summarize(trades: list[Rsi2Trade], cost_bps: float) -> dict[str, Any]:
     }
 
 
+def _empty_baseline() -> dict[str, Any]:
+    nan = float("nan")
+    return {
+        "runs": 0,
+        "baseline_pct": nan,
+        "expectancy_pct": nan,
+        "mean_pct": nan,
+        "median_pct": nan,
+        "p05_pct": nan,
+        "p95_pct": nan,
+        "std_pct": nan,
+        "p_value": nan,
+        "expectancies_pct": [],
+    }
+
+
+def _draw_non_overlapping(
+    rng: np.random.Generator,
+    eligible: np.ndarray,
+    held_periods: np.ndarray,
+    trade_count: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Sample entry days and holding periods without replacement, no overlap."""
+    holds = rng.choice(held_periods, size=trade_count, replace=False).astype(int)
+    holds = holds[rng.permutation(trade_count)]
+
+    latest = np.empty(trade_count, dtype=int)
+    latest[-1] = int(eligible[-1])
+    for k in range(trade_count - 2, -1, -1):
+        bound = int(latest[k + 1]) - int(holds[k])
+        pos = int(np.searchsorted(eligible, bound, side="right")) - 1
+        if pos < 0:
+            return None
+        latest[k] = int(eligible[pos])
+
+    entries = np.empty(trade_count, dtype=int)
+    min_next = int(eligible[0])
+    for k in range(trade_count):
+        lo = int(np.searchsorted(eligible, min_next, side="left"))
+        hi = int(np.searchsorted(eligible, latest[k], side="right"))
+        if hi <= lo:
+            return None
+        entries[k] = int(eligible[int(rng.integers(lo, hi))])
+        min_next = entries[k] + int(holds[k])
+    return entries, holds
+
+
 def random_baseline(
     bars: pd.DataFrame,
     entry_indices: np.ndarray,
     held_periods: np.ndarray,
     cost_bps: float = BASE_COST_BPS,
+    real_expectancy: float | None = None,
 ) -> dict[str, Any]:
-    """1,000 random entry-day strategies holding the real holding-period mix."""
+    """1,000 regime-matched random entry strategies, sampled without replacement.
+
+    Trial #21: entries are drawn from the whole history but must satisfy
+    close > SMA200(t); entry days and holding periods are sampled without
+    replacement; holding windows never overlap within a run.
+    """
     frame = _prepare(bars)
     n = len(frame)
     opens = frame["open"].to_numpy(dtype=float)
     if n == 0 or entry_indices.size == 0 or held_periods.size == 0:
-        return {"runs": 0, "baseline_pct": float("nan"), "expectancy_pct": float("nan")}
+        return _empty_baseline()
 
+    closes = frame["close"].to_numpy(dtype=float)
+    sma200 = sma(frame["close"], SMA_ENTRY_PERIOD).to_numpy(dtype=float)
     max_held = int(max(held_periods.max(), 1))
-    safe = entry_indices[entry_indices + 1 + max_held < n]
-    if safe.size == 0:
-        return {"runs": 0, "baseline_pct": float("nan"), "expectancy_pct": float("nan")}
+    eligible = np.flatnonzero(
+        ~np.isnan(sma200)
+        & (closes > sma200)
+        & (np.arange(n) + 1 + max_held < n)
+    )
+    trade_count = int(entry_indices.size)
+    if eligible.size < trade_count:
+        return _empty_baseline()
 
     rng = np.random.default_rng(20261105)
     rets: list[float] = []
     for _ in range(BASELINE_RUNS):
-        picks = rng.choice(safe, size=len(entry_indices), replace=True)
-        held = rng.choice(held_periods, size=len(picks), replace=True)
+        draw = None
+        for _attempt in range(100):
+            draw = _draw_non_overlapping(rng, eligible, held_periods, trade_count)
+            if draw is not None:
+                break
+        if draw is None:
+            return _empty_baseline()
+        entries, holds = draw
         values = []
-        for entry_index, holding in zip(picks, held):
+        for entry_index, holding in zip(entries, holds):
             buy_open = float(opens[int(entry_index) + 1])
             sell_open = float(opens[int(entry_index) + 1 + int(holding)])
             values.append(_net_return_pct(buy_open, sell_open, cost_bps))
         rets.append(float(np.mean(values)))
     rets_array = np.array(rets, dtype=float)
     return {
-        "runs": int(len(rets)),
+        "runs": int(rets_array.size),
         "baseline_pct": float(np.percentile(rets_array, BASELINE_PERCENTILE)),
         "expectancy_pct": float(rets_array.mean()),
+        "mean_pct": float(rets_array.mean()),
+        "median_pct": float(np.median(rets_array)),
+        "p05_pct": float(np.percentile(rets_array, 5.0)),
+        "p95_pct": float(np.percentile(rets_array, BASELINE_PERCENTILE)),
+        "std_pct": float(rets_array.std(ddof=1)),
+        "p_value": float((rets_array >= real_expectancy).mean()) if real_expectancy is not None else None,
+        "expectancies_pct": [float(value) for value in rets_array],
     }
