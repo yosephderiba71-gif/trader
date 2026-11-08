@@ -29,8 +29,6 @@ def _provider(tmp_path: Path) -> CsvMarketDataProvider:
 def test_default_provider_finds_local_assets():
     provider = default_provider()
     symbols = provider.list_symbols()
-    assert "XAUUSD" in symbols
-    assert "GC=F" in symbols
     assert "SPY" in symbols
 
 

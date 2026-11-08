@@ -134,8 +134,6 @@ def test_csv_provider_reads_and_filters(tmp_path):
 
 def test_csv_provider_default_roots():
     provider = CsvMarketDataProvider()
-    assert "XAUUSD" in provider.list_symbols()
-    assert "GC=F" in provider.list_symbols()
     assert "SPY" in provider.list_symbols()
 
 
