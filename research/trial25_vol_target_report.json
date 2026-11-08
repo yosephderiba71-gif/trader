@@ -1,0 +1,133 @@
+{
+  "strategy": "institutional_cross_sectional_sector_momentum",
+  "variant": "volatility_targeting",
+  "trial": 25,
+  "rules_file": "research/trial25_vol_target_rules.md",
+  "universe": [
+    "XLK",
+    "XLF",
+    "XLV",
+    "XLE",
+    "XLI",
+    "XLY",
+    "XLP",
+    "XLU",
+    "XLB",
+    "XLRE",
+    "XLC"
+  ],
+  "benchmark": "SPY",
+  "cost_bps_per_trade": 10.0,
+  "rebalance_frequency": "first_trading_day_of_each_month",
+  "volatility_targeting": {
+    "target_annualized_volatility_pct": 15.0,
+    "volatility_window_days": 60,
+    "scalar_min": 0.5,
+    "scalar_max": 1.35,
+    "margin_rate_pct": 5.0,
+    "average_basket_volatility_pct": 14.1519,
+    "average_scalar": 1.068,
+    "average_gross_exposure": 1.0002,
+    "max_gross_exposure": 1.35,
+    "rebalances_with_margin": 154
+  },
+  "data": {
+    "source": "yfinance",
+    "auto_adjust": true,
+    "first_date": "1993-01-29",
+    "last_date": "2026-11-06",
+    "trading_days": 8502,
+    "sector_observations": {
+      "XLK": 7012,
+      "XLF": 7012,
+      "XLV": 7012,
+      "XLE": 7012,
+      "XLI": 7012,
+      "XLY": 7012,
+      "XLP": 7012,
+      "XLU": 7012,
+      "XLB": 7012,
+      "XLRE": 2787,
+      "XLC": 2109
+    },
+    "backtest_start": "2005-01-03",
+    "backtest_end": "2026-11-06",
+    "backtest_observations": 5497,
+    "is_start": "2005-01-03",
+    "is_end": "2020-04-16",
+    "is_daily_returns": 3847,
+    "oos_start": "2020-04-16",
+    "oos_end": "2026-11-06",
+    "oos_daily_returns": 1649,
+    "rebalance_count_total": 263,
+    "rebalance_count_is": 184,
+    "rebalance_count_oos": 79
+  },
+  "in_sample": {
+    "raw_return_pct": 84.4169,
+    "total_return_pct": 84.4169,
+    "cagr_pct": 4.086,
+    "max_drawdown_pct": -33.1314,
+    "sharpe_ratio": 0.323,
+    "calmar_ratio": 0.1233,
+    "trade_count": 178,
+    "win_rate": 0.5955056179775281,
+    "asset_order_count": 677
+  },
+  "out_of_sample": {
+    "raw_return_pct": 108.3859,
+    "total_return_pct": 108.3859,
+    "cagr_pct": 11.8482,
+    "max_drawdown_pct": -20.1362,
+    "sharpe_ratio": 0.7883,
+    "calmar_ratio": 0.5884,
+    "trade_count": 79,
+    "win_rate": 0.5822784810126582,
+    "asset_order_count": 304
+  },
+  "buy_and_hold_spy_oos_return_pct": 188.0472,
+  "random_baseline": {
+    "runs": 1000,
+    "seed": 20261107,
+    "p95_return_pct": 168.2926,
+    "mean_return_pct": 104.9088,
+    "median_return_pct": 101.292,
+    "p05_return_pct": 54.8876,
+    "std_return_pct": 35.0128,
+    "strategy_percentile": 59.1
+  },
+  "strategy_beat_random_baseline": false,
+  "calendar_year_metrics": {
+    "2008": {
+      "total_return_pct": -18.6366,
+      "max_drawdown_pct": -22.9598,
+      "spy_buy_and_hold_return_pct": -36.795,
+      "observations": 253,
+      "period": "in_sample"
+    },
+    "2022": {
+      "total_return_pct": 10.3002,
+      "max_drawdown_pct": -12.4982,
+      "spy_buy_and_hold_return_pct": -18.1754,
+      "observations": 251,
+      "period": "out_of_sample"
+    }
+  },
+  "definitions": {
+    "universe": "All 11 SPDR sectors; a sector without at least 200 valid observations is ineligible.",
+    "signal_timing": "Signals use closes through the rebalance date; new weights earn the next day's return. No lookahead.",
+    "skip_month_return": "(Price[t-20] / Price[t-120]) - 1.",
+    "cash": "Unallocated weight earns 0%; negative cash represents a margin debit.",
+    "volatility_target": "At each monthly rebalance, compute the last 60 daily simple returns of the equal-weight selected-sector basket (1/3 per selected sector; any unallocated remainder is cash with zero return), annualize the sample standard deviation by sqrt(252), set scalar = 0.15 / basket volatility, clip the scalar to [0.50, 1.35], and multiply each selected-sector weight by the scalar. Cash is 1 - gross exposure and may be negative.",
+    "margin_cost": "When gross exposure exceeds 1.0, a 5% annual rate is charged monthly on the margin debit: (gross exposure - 1) * 5% / 12.",
+    "cost_model": "10bp applied to one-way sector-weight turnover; cash and margin-debit changes are excluded from trade turnover and charged through the margin cost.",
+    "trade_count": "Rebalance dates with non-zero sector turnover.",
+    "win_rate": "Share of counted rebalance trades with a positive return over the following holding period.",
+    "max_drawdown_pct": "Peak-to-trough drawdown as a negative percentage.",
+    "cagr_pct": "Calendar-day compound annual growth rate.",
+    "sharpe_ratio": "Annualized daily Sharpe ratio with a 0% risk-free rate; daily returns use sample standard deviation (ddof=1).",
+    "calmar_ratio": "CAGR divided by the absolute max drawdown.",
+    "random_baseline": "1000 random monthly schedules. At each OOS rebalance, the baseline samples the same number of positions as the strategy from the same eligible set, without replacement; selected sectors get 1/3 each times the same volatility scalar computed from the baseline's own 60-day equal-weight basket, cash is the residual, and the same 10bp trade and 5% annual margin costs apply. It starts from the strategy's OOS-start weights and uses the same dates.",
+    "calendar_year_metrics": "Calendar-year total return and intra-year peak-to-trough drawdown; 2008 is in-sample, 2022 is out-of-sample under the 70/30 split."
+  }
+}

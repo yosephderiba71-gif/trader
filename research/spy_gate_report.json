@@ -1,0 +1,48 @@
+{
+  "strategy": "spy_200_sma_gate",
+  "rule": "Hold SPY when SPY Close > SPY 200-day SMA; otherwise hold 100% cash.",
+  "benchmark": "SPY",
+  "cost_bps_per_trade": 10.0,
+  "rebalance_frequency": "first_trading_day_of_each_month",
+  "data": {
+    "source": "yfinance",
+    "auto_adjust": true,
+    "first_date": "1993-01-29",
+    "last_date": "2026-11-06",
+    "trading_days": 8502,
+    "backtest_start": "2005-01-03",
+    "backtest_end": "2026-11-06",
+    "backtest_observations": 5497,
+    "is_start": "2005-01-03",
+    "is_end": "2020-04-16",
+    "is_daily_returns": 3847,
+    "oos_start": "2020-04-16",
+    "oos_end": "2026-11-06",
+    "oos_daily_returns": 1649,
+    "rebalance_count_total": 263,
+    "rebalance_count_is": 184,
+    "rebalance_count_oos": 79
+  },
+  "in_sample": {
+    "total_return_pct": 139.7818,
+    "cagr_pct": 5.8895,
+    "max_drawdown_pct": -36.8815,
+    "sharpe_ratio": 0.4797,
+    "calmar_ratio": 0.1597
+  },
+  "out_of_sample": {
+    "total_return_pct": 98.2236,
+    "cagr_pct": 10.9987,
+    "max_drawdown_pct": -27.8719,
+    "sharpe_ratio": 0.8698,
+    "calmar_ratio": 0.3946,
+    "observations": 1650
+  },
+  "buy_and_hold_spy_oos_return_pct": 188.0473,
+  "definitions": {
+    "signal_timing": "Signals use SPY closes through the rebalance date; new weights earn the next day's return. No lookahead.",
+    "cost_model": "10bp applied to one-way SPY weight turnover; cash earns 0%.",
+    "max_drawdown_pct": "Peak-to-trough drawdown as a negative percentage.",
+    "calmar_ratio": "CAGR divided by the absolute max drawdown."
+  }
+}

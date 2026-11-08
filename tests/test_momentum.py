@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from momentum_bot.rebalance import RebalanceOrder, compute_rebalance_orders
+from momentum_bot.rebalance import RebalanceOrder, compute_rebalance_orders, rebalance
 from momentum_bot.signals import (
     MOMENTUM_WINDOW,
     AssetMetrics,
@@ -206,3 +206,148 @@ def test_rebalance_floors_target_shares():
 def test_rebalance_requires_price_for_target():
     with pytest.raises(ValueError):
         compute_rebalance_orders(100_000.0, {"SPY": 0.50}, {}, {})
+
+
+def test_rebalance_rejects_gross_exposure_above_100_percent():
+    targets = {"SPY": 0.675, "GLD": 0.675, "CASH": -0.35}
+
+    with pytest.raises(ValueError, match="target weights sum to more than 100%"):
+        compute_rebalance_orders(
+            equity=100_000.0,
+            targets=targets,
+            positions={},
+            prices={"SPY": 100.0, "GLD": 100.0},
+        )
+
+
+def test_rebalance_sizes_from_equity_not_cash():
+    class FakeAccount:
+        equity = "100000"
+        cash = "0"
+
+    class FakeTradingClient:
+        def get_account(self):
+            return FakeAccount()
+
+        def get_all_positions(self):
+            return []
+
+    orders = rebalance(
+        {"SPY": 0.50, "GLD": 0.50, "CASH": 0.0},
+        latest_prices={"SPY": 100.0, "GLD": 100.0},
+        dry_run=True,
+        trading_client=FakeTradingClient(),
+        data_client=object(),
+    )
+
+    assert [order.symbol for order in orders] == ["GLD", "SPY"]
+    assert all(order.qty == 500.0 for order in orders)
+
+
+def test_rebalance_aborts_on_sell_timeout_and_skips_buys():
+    from types import SimpleNamespace
+
+    class FakeTradingClient:
+        def __init__(self):
+            self.submitted = []
+            self.canceled = []
+
+        def get_account(self):
+            return SimpleNamespace(equity="100000")
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="TLT", qty="100", current_price="100")]
+
+        def submit_order(self, order_data):
+            self.submitted.append(order_data)
+            return SimpleNamespace(
+                id=f"order-{len(self.submitted)}",
+                status="new",
+                symbol=order_data.symbol,
+            )
+
+        def get_order_by_id(self, order_id):
+            return SimpleNamespace(id=order_id, status="new")
+
+        def cancel_order_by_id(self, order_id):
+            self.canceled.append(order_id)
+
+    client = FakeTradingClient()
+    with pytest.raises(RuntimeError, match="sell order timeout"):
+        rebalance(
+            {"SPY": 0.50, "GLD": 0.50, "CASH": 0.0},
+            latest_prices={"SPY": 100.0, "GLD": 100.0, "TLT": 100.0},
+            dry_run=False,
+            trading_client=client,
+            data_client=object(),
+            sell_fill_timeout=0.01,
+            sell_fill_poll_interval=0.001,
+        )
+
+    assert [order.symbol for order in client.submitted] == ["TLT"]
+    assert client.canceled == ["order-1"]
+
+
+def test_rebalance_submits_buys_only_after_sells_fill():
+    from types import SimpleNamespace
+
+    class FakeTradingClient:
+        def __init__(self):
+            self.submitted = []
+
+        def get_account(self):
+            return SimpleNamespace(equity="100000")
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="TLT", qty="100", current_price="100")]
+
+        def submit_order(self, order_data):
+            self.submitted.append(order_data)
+            return SimpleNamespace(
+                id=f"order-{len(self.submitted)}",
+                status="new",
+                symbol=order_data.symbol,
+            )
+
+        def get_order_by_id(self, order_id):
+            return SimpleNamespace(id=order_id, status="filled")
+
+        def cancel_order_by_id(self, order_id):
+            raise AssertionError("cancel should not be called")
+
+    client = FakeTradingClient()
+    orders = rebalance(
+        {"SPY": 0.50, "GLD": 0.50, "CASH": 0.0},
+        latest_prices={"SPY": 100.0, "GLD": 100.0, "TLT": 100.0},
+        dry_run=False,
+        trading_client=client,
+        data_client=object(),
+        sell_fill_timeout=0.01,
+        sell_fill_poll_interval=0.001,
+    )
+
+    assert [order.side for order in orders] == ["sell", "buy", "buy"]
+    assert [order.symbol for order in client.submitted] == ["TLT", "GLD", "SPY"]
+
+
+def test_first_trading_day_guard():
+    from datetime import date
+    from types import SimpleNamespace
+
+    from momentum_bot.rebalance import is_first_trading_day
+
+    class FakeTradingClient:
+        def __init__(self, days):
+            self.days = days
+
+        def get_calendar(self, request):
+            return [SimpleNamespace(date=day) for day in self.days]
+
+    assert is_first_trading_day(
+        FakeTradingClient([date(2026, 11, 2)]),
+        today=date(2026, 11, 2),
+    )
+    assert not is_first_trading_day(
+        FakeTradingClient([date(2026, 11, 2), date(2026, 11, 3)]),
+        today=date(2026, 11, 3),
+    )

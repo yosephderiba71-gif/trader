@@ -1,0 +1,121 @@
+{
+  "strategy": "turn_of_the_month_effect",
+  "trial": 27,
+  "rules_file": "research/trial27_rules.md",
+  "status": "COMPLETED",
+  "assets": {
+    "risky": "SPY",
+    "cash": "BIL"
+  },
+  "cost_roundtrip_bps": 5.0,
+  "train_fraction": 0.7,
+  "data": {
+    "source": "yfinance",
+    "start_date": "2000-01-04",
+    "end_date": "2026-11-06",
+    "total_observations": 6752,
+    "is_start": "2000-01-04",
+    "is_end": "2018-10-15",
+    "is_observations": 4726,
+    "oos_start": "2018-10-16",
+    "oos_end": "2026-11-06",
+    "oos_observations": 2026
+  },
+  "totm_4day_primary": {
+    "description": "SPY held on all 4 anomaly days (Day -1, Day +1, Day +2, Day +3), BIL otherwise.",
+    "in_sample": {
+      "total_return_pct": 52.7693,
+      "cagr_pct": 2.2822,
+      "max_drawdown_pct": -18.6097,
+      "sharpe_ratio": 0.3235,
+      "calmar_ratio": 0.1226
+    },
+    "out_of_sample": {
+      "total_return_pct": 59.0675,
+      "cagr_pct": 5.9297,
+      "max_drawdown_pct": -9.1694,
+      "sharpe_ratio": 0.7615,
+      "calmar_ratio": 0.6467
+    },
+    "baseline_percentiles": {
+      "calmar_percentile": 93.5,
+      "sharpe_percentile": 86.1,
+      "return_percentile": 84.0
+    },
+    "beat_p95_calmar": false,
+    "beat_p95_sharpe": false
+  },
+  "totm_3day_close_execution": {
+    "description": "Entered at Day -1 close, exited at Day +3 close (SPY held Day +1, +2, +3; BIL on Day -1 and rest).",
+    "in_sample": {
+      "total_return_pct": 55.3156,
+      "cagr_pct": 2.3723,
+      "max_drawdown_pct": -20.5055,
+      "sharpe_ratio": 0.3615,
+      "calmar_ratio": 0.1157
+    },
+    "out_of_sample": {
+      "total_return_pct": 66.5958,
+      "cagr_pct": 6.5394,
+      "max_drawdown_pct": -9.0226,
+      "sharpe_ratio": 0.9264,
+      "calmar_ratio": 0.7248
+    },
+    "vs_4day_baseline": {
+      "calmar_percentile": 95.6,
+      "sharpe_percentile": 93.6,
+      "beat_p95_calmar": true,
+      "beat_p95_sharpe": false
+    },
+    "vs_3day_baseline": {
+      "calmar_percentile": 93.6,
+      "sharpe_percentile": 92.3,
+      "beat_p95_calmar": false,
+      "beat_p95_sharpe": false
+    }
+  },
+  "benchmark_spy_buy_and_hold": {
+    "in_sample": {
+      "total_return_pct": 178.6921,
+      "cagr_pct": 5.6096,
+      "max_drawdown_pct": -55.1894,
+      "sharpe_ratio": 0.381,
+      "calmar_ratio": 0.1016
+    },
+    "out_of_sample": {
+      "total_return_pct": 195.5748,
+      "cagr_pct": 14.3967,
+      "max_drawdown_pct": -33.7173,
+      "sharpe_ratio": 0.7937,
+      "calmar_ratio": 0.427
+    }
+  },
+  "clean_random_baseline_4day": {
+    "runs": 1000,
+    "seed": 20261107,
+    "window_days": 4,
+    "p95_calmar": 0.698,
+    "p95_sharpe": 0.98,
+    "p95_return_pct": 86.5515,
+    "median_calmar": 0.1919,
+    "median_sharpe": 0.4214,
+    "median_return_pct": 30.6587,
+    "median_mdd_pct": -17.0808,
+    "mean_calmar": 0.2446,
+    "mean_sharpe": 0.4343,
+    "mean_return_pct": 33.356,
+    "mean_mdd_pct": -18.1186
+  },
+  "clean_random_baseline_3day": {
+    "runs": 1000,
+    "seed": 20261107,
+    "window_days": 3,
+    "p95_calmar": 0.783,
+    "p95_sharpe": 1.0109,
+    "p95_return_pct": 74.446,
+    "median_calmar": 0.2177,
+    "median_sharpe": 0.4709,
+    "median_return_pct": 29.788,
+    "median_mdd_pct": -14.7594
+  }
+}

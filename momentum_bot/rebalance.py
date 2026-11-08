@@ -1,19 +1,26 @@
-"""Alpaca execution for the frozen multi-asset momentum rules.
+"""Alpaca execution for the frozen unlevered momentum rules.
 
-Current state always comes from Alpaca's positions endpoint
-(``api.list_positions()`` in the REST API, ``get_all_positions()`` in
-alpaca-py). No flat file is used as position state.
+Targets are capped at 100% gross exposure. Position sizes are computed from
+account equity, never from cash. Current state always comes from Alpaca's
+positions endpoint (``api.list_positions()`` in the REST API,
+``get_all_positions()`` in alpaca-py). No flat file is used as position state.
 """
 from __future__ import annotations
 
 import math
 import os
+import sys
+import time
 from dataclasses import dataclass
+from datetime import date
 from typing import Mapping
 
 import numpy as np
 
 CASH = "CASH"
+MAX_GROSS_EXPOSURE = 1.0
+SELL_FILL_TIMEOUT_SECONDS = 30.0
+SELL_FILL_POLL_SECONDS = 1.0
 _EPS = 1e-9
 
 
@@ -44,7 +51,7 @@ def compute_rebalance_orders(
             raise ValueError(f"invalid target weight for {symbol}: {weight}")
         if weight > 0:
             tradable[symbol] = weight
-    if sum(tradable.values()) > 1.0 + 1e-6:
+    if sum(tradable.values()) > MAX_GROSS_EXPOSURE + 1e-6:
         raise ValueError("target weights sum to more than 100%")
 
     exits: list[RebalanceOrder] = []
@@ -154,10 +161,11 @@ def _print_plan(
         )
 
 
-def _submit_orders(trading_client, orders: list[RebalanceOrder]) -> None:
+def _submit_orders(trading_client, orders: list[RebalanceOrder]) -> list:
     from alpaca.trading.enums import OrderSide, TimeInForce
     from alpaca.trading.requests import MarketOrderRequest
 
+    submitted_orders = []
     for order in orders:
         qty = int(order.qty) if float(order.qty).is_integer() else order.qty
         request = MarketOrderRequest(
@@ -167,10 +175,115 @@ def _submit_orders(trading_client, orders: list[RebalanceOrder]) -> None:
             time_in_force=TimeInForce.DAY,
         )
         submitted = trading_client.submit_order(order_data=request)
+        submitted_orders.append(submitted)
         print(
             f"Submitted {order.side} {order.qty:g} {order.symbol}: "
             f"id={submitted.id} status={submitted.status}"
         )
+    return submitted_orders
+
+
+def _status_value(order) -> str:
+    status = getattr(order, "status", None)
+    return str(getattr(status, "value", status) or "").lower()
+
+
+def _cancel_order(trading_client, order_id: str) -> None:
+    try:
+        trading_client.cancel_order_by_id(order_id)
+    except Exception as exc:
+        print(f"WARNING: failed to cancel order {order_id}: {exc}", file=sys.stderr)
+
+
+def _wait_for_sell_fills(
+    trading_client,
+    submitted_orders: list,
+    timeout: float = SELL_FILL_TIMEOUT_SECONDS,
+    poll_interval: float = SELL_FILL_POLL_SECONDS,
+) -> None:
+    """Wait for sells to fill, then allow the caller to submit buys.
+
+    A rejected/canceled/expired sell or a 30-second timeout cancels every
+    pending sell and raises before any buy order can be submitted.
+    """
+    if not submitted_orders:
+        return
+
+    pending = {
+        str(getattr(order, "id", "")): order
+        for order in submitted_orders
+    }
+    deadline = time.monotonic() + max(0.0, float(timeout))
+
+    while True:
+        failed: list[tuple[str, str]] = []
+        for order_id, submitted in list(pending.items()):
+            try:
+                current = trading_client.get_order_by_id(order_id)
+            except Exception as exc:
+                print(
+                    f"!!! SELL ORDER STATUS ERROR: {order_id} ({submitted.symbol}): {exc} !!!",
+                    file=sys.stderr,
+                )
+                failed.append((order_id, "status_error"))
+                pending.pop(order_id, None)
+                continue
+
+            status = _status_value(current)
+            if status == "filled":
+                pending.pop(order_id, None)
+            elif status in {"canceled", "expired", "rejected", "suspended", "done_for_day"}:
+                failed.append((order_id, status))
+                pending.pop(order_id, None)
+
+        if failed:
+            for order_id, status in failed:
+                print(
+                    f"!!! SELL ORDER FAILED: id={order_id} status={status} !!!",
+                    file=sys.stderr,
+                )
+            for order_id in list(pending):
+                _cancel_order(trading_client, order_id)
+            print(
+                "!!! ABORTING: a sell order did not fill; "
+                "no buy orders will be submitted. !!!",
+                file=sys.stderr,
+            )
+            raise RuntimeError("sell order failed; aborted before buy phase")
+
+        if not pending:
+            return
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        time.sleep(min(max(0.0, float(poll_interval)), remaining))
+
+    print(
+        f"!!! SELL ORDER TIMEOUT: not all sell orders filled within {timeout:g}s. !!!",
+        file=sys.stderr,
+    )
+    for order_id in list(pending):
+        _cancel_order(trading_client, order_id)
+    print(
+        "!!! ABORTING: pending sell orders canceled; "
+        "no buy orders will be submitted. !!!",
+        file=sys.stderr,
+    )
+    raise RuntimeError("sell order timeout; aborted before buy phase")
+
+
+def is_first_trading_day(trading_client, today: date | None = None) -> bool:
+    """Return True when ``today`` is the first trading day of its month."""
+    from alpaca.trading.requests import GetCalendarRequest
+
+    today = today or date.today()
+    start = today.replace(day=1)
+    calendar = trading_client.get_calendar(
+        GetCalendarRequest(start=start, end=today)
+    )
+    trading_days = [entry.date for entry in calendar]
+    return bool(trading_days) and trading_days[0] == today
 
 
 def rebalance(
@@ -179,6 +292,9 @@ def rebalance(
     dry_run: bool = True,
     trading_client=None,
     data_client=None,
+    sell_fill_timeout: float = SELL_FILL_TIMEOUT_SECONDS,
+    sell_fill_poll_interval: float = SELL_FILL_POLL_SECONDS,
+    require_first_trading_day: bool = False,
 ) -> list[RebalanceOrder]:
     if trading_client is None:
         trading_client, data_client = _build_clients()
@@ -224,5 +340,19 @@ def rebalance(
     if dry_run:
         print("DRY RUN: no orders submitted.")
         return orders
-    _submit_orders(trading_client, orders)
+
+    if require_first_trading_day and not is_first_trading_day(trading_client):
+        print("Not the first trading day of the month; no orders submitted.")
+        return []
+
+    sells = [order for order in orders if order.side == "sell"]
+    buys = [order for order in orders if order.side == "buy"]
+    submitted_sells = _submit_orders(trading_client, sells)
+    _wait_for_sell_fills(
+        trading_client,
+        submitted_sells,
+        timeout=sell_fill_timeout,
+        poll_interval=sell_fill_poll_interval,
+    )
+    _submit_orders(trading_client, buys)
     return orders

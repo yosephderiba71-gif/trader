@@ -1,0 +1,55 @@
+{
+  "strategy": "institutional_cross_sectional_sector_momentum",
+  "trial": 24,
+  "variant": "clean_unlevered_random_baseline",
+  "universe": [
+    "XLK",
+    "XLF",
+    "XLV",
+    "XLE",
+    "XLI",
+    "XLY",
+    "XLP",
+    "XLU",
+    "XLB",
+    "XLRE",
+    "XLC"
+  ],
+  "benchmark": "SPY",
+  "cost_bps_per_trade": 10.0,
+  "baseline_definition": "1000 random monthly schedules. At each OOS rebalance, sample 3 sectors from the full 11-sector universe without replacement, equal 1/3 each, no 200-SMA eligibility filter, no volatility targeting, no margin. Starts from the Trial #24 OOS-start weights and uses the same dates and 10bp one-way turnover cost.",
+  "data": {
+    "source": "yfinance",
+    "auto_adjust": true,
+    "first_date": "1993-01-29",
+    "last_date": "2026-11-06",
+    "trading_days": 8502,
+    "backtest_start": "2005-01-03",
+    "backtest_end": "2026-11-06",
+    "backtest_observations": 5497,
+    "is_start": "2005-01-03",
+    "is_end": "2020-04-16",
+    "is_daily_returns": 3847,
+    "oos_start": "2020-04-16",
+    "oos_end": "2026-11-06",
+    "oos_daily_returns": 1649,
+    "rebalance_count_total": 263,
+    "rebalance_count_oos": 79
+  },
+  "trial24_out_of_sample": {
+    "total_return_pct": 145.0857,
+    "cagr_pct": 14.6497,
+    "max_drawdown_pct": -16.881
+  },
+  "clean_random_baseline": {
+    "runs": 1000,
+    "seed": 20261107,
+    "p95_return_pct": 206.4791,
+    "mean_return_pct": 134.3916,
+    "median_return_pct": 133.4958,
+    "p05_return_pct": 71.641,
+    "std_return_pct": 41.5899,
+    "strategy_percentile": 62.9
+  },
+  "strategy_beat_clean_baseline": false
+}
