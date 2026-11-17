@@ -1,24 +1,31 @@
 """Discipline Bot: Cash-Flow Rebalancing with Dip Accelerator.
 
-Specifications (research/discipline_bot_rules.md):
+Specifications:
 - Assets: SPY (80%), TLT (20%).
 - Execution: Standard Market Orders (fractional shares via `notional`) at 12:00 EST.
+  Weekly cadence: execute on the first open market day of each ISO week, using
+  US Eastern Time and Alpaca's market clock. Monday holidays naturally fall
+  through to Tuesday; ISO-week idempotency prevents duplicate executions.
 - Cash-Flow Rebalancing: Target Drift Band ±3% (SPY 77%-83%, TLT 17%-23%).
   Direct new cash 100% into the asset that is currently underweight.
   Explicit Sell Rebalance: Only trigger if an asset breaches outer band (e.g. SPY > 83%)
   AND new cash is insufficient to fix it.
 - Market Dip Accelerator:
-  Base Deposit: $500 (configurable).
-  If SPY is >15% below 52-week high: Deposit = $625 (1.25x).
-  If SPY is >25% below 52-week high: Deposit = $750 (1.50x).
+  Base Deposit: $125/week (configurable).
+  If SPY is >15% below 52-week high: Deposit = $156.25 (1.25x).
+  If SPY is >25% below 52-week high: Deposit = $187.50 (1.50x).
 - Production Hardening & Safety:
-  1. Calendar Guard: Hard check at the very beginning of execution.
-     If day > 7, print 'Not the first week of the month. Skipping.' and return.
-  2. Client Order ID: Tag order with client_order_id=f"discipline_{YYYYMM}".
-  3. Strict Idempotency: Query Alpaca Activity API (`get_activities`).
-     ONLY match filled orders where client_order_id exactly matches discipline_{YYYYMM}.
-     Ignore manual trades and dividends.
-  4. Hard Paper Assertion: Raise ValueError if `paper=True` is not explicitly set.
+  1. Market Clock Guard: Only execute while the US market is open, based on the
+     timestamp converted to America/New_York. Never use naive UTC datetime.now().
+  2. Client Order ID: Tag order with client_order_id=f"discipline_{ISOYEAR}W{ISOWEEK:02d}".
+  3. Strict Idempotency: Query Alpaca Activity API (`get_activities`) and open
+     orders. ONLY match orders where client_order_id exactly matches
+     discipline_{ISOYEAR}W{ISOWEEK:02d}. Ignore manual trades and dividends.
+  4. Non-Margin Cash Guard: Only account.cash (optionally min'd with
+     non_marginable_buying_power) may fund orders; never account.buying_power.
+     Cap the buy notional at min(scaled_deposit, available_cash); skip cleanly
+     when available_cash < $1.00.
+  5. Hard Paper Assertion: Raise ValueError if `paper=True` is not explicitly set.
 """
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 SPY_TARGET = 0.80
 TLT_TARGET = 0.20
@@ -38,11 +46,13 @@ SPY_MAX_WEIGHT = SPY_TARGET + DRIFT_BAND  # 0.83
 TLT_MIN_WEIGHT = TLT_TARGET - DRIFT_BAND  # 0.17
 TLT_MAX_WEIGHT = TLT_TARGET + DRIFT_BAND  # 0.23
 
-BASE_DEPOSIT = 500.0
+EASTERN_TZ = ZoneInfo("America/New_York")
+BASE_DEPOSIT = 125.0
 DIP_15_THRESHOLD = 0.15
 DIP_25_THRESHOLD = 0.25
 DIP_15_MULTIPLIER = 1.25
 DIP_25_MULTIPLIER = 1.50
+MIN_CASH_TO_DEPLOY = 1.00
 
 
 @dataclass(frozen=True)
@@ -67,10 +77,41 @@ class RebalancePlan:
     sell_orders: list[BotOrder]
 
 
+def _as_eastern(dt: datetime, naive_tz: ZoneInfo | timezone = timezone.utc) -> datetime:
+    """Return a timezone-aware US Eastern datetime (naive input gets naive_tz)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=naive_tz)
+    return dt.astimezone(EASTERN_TZ)
+
+
+def eastern_now(
+    clock: Any | None = None,
+    current_date: date | datetime | None = None,
+) -> datetime:
+    """Resolve the current time in US Eastern Time.
+
+    Preference order: explicit test date, Alpaca clock timestamp, then a
+    timezone-aware system clock. Never a naive datetime.now().
+    """
+    if current_date is not None:
+        if isinstance(current_date, datetime):
+            return _as_eastern(current_date, naive_tz=EASTERN_TZ)
+        return datetime(current_date.year, current_date.month, current_date.day, tzinfo=EASTERN_TZ)
+
+    timestamp = getattr(clock, "timestamp", None) if clock is not None else None
+    if isinstance(timestamp, datetime):
+        return _as_eastern(timestamp)
+    return datetime.now(EASTERN_TZ)
+
+
 def format_client_order_id(current_date: date | datetime | None = None) -> str:
-    """Format client_order_id as discipline_YYYYMM."""
-    current_date = current_date or datetime.now()
-    return f"discipline_{current_date.strftime('%Y%m')}"
+    """Format client_order_id as discipline_{ISO_YEAR}W{ISO_WEEK:02d}."""
+    if current_date is None:
+        current_date = datetime.now(EASTERN_TZ)
+    if isinstance(current_date, datetime):
+        current_date = _as_eastern(current_date, naive_tz=EASTERN_TZ).date()
+    iso_year, iso_week, _ = current_date.isocalendar()
+    return f"discipline_{iso_year}W{iso_week:02d}"
 
 
 def assert_paper_mode(paper: bool) -> None:
@@ -175,17 +216,16 @@ def plan_rebalance(
     )
 
 
-def has_filled_this_month(
+def has_filled_this_week(
     activities: list[Any],
     current_date: date | datetime | None = None,
 ) -> bool:
-    """Strict idempotency check.
-    
+    """Strict weekly idempotency check.
+
     ONLY looks for filled orders where client_order_id exactly matches
-    discipline_{current_year_month}. Ignores manual trades or dividends.
+    discipline_{ISO_YEAR}W{ISO_WEEK:02d}. Ignores manual trades or dividends.
     """
-    current_date = current_date or datetime.now()
-    expected_client_order_id = format_client_order_id(current_date)
+    expected_client_order_id = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
 
     for act in activities:
         act_type = (
@@ -202,11 +242,33 @@ def has_filled_this_month(
             if isinstance(act, dict)
             else getattr(act, "client_order_id", None)
         )
-        # Strict match: only abort if client_order_id matches discipline_{YYYYMM}
+        # Strict match: only abort if client_order_id matches the ISO-week tag
         if cid == expected_client_order_id:
             return True
 
     return False
+
+
+def has_existing_week_order(
+    orders: list[Any],
+    current_date: date | datetime | None = None,
+) -> bool:
+    """Return True if an order already carries this ISO week's client_order_id."""
+    expected_client_order_id = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
+
+    for order in orders:
+        cid = (
+            order.get("client_order_id")
+            if isinstance(order, dict)
+            else getattr(order, "client_order_id", None)
+        )
+        if cid == expected_client_order_id:
+            return True
+
+    return False
+
+
+has_filled_this_month = has_filled_this_week
 
 
 def _load_env_file(path: str = ".env") -> None:
@@ -256,6 +318,42 @@ def get_account_activities(trading_client) -> list[Any]:
         return trading_client.get("/account/activities")
 
 
+def get_existing_orders(trading_client) -> list[Any]:
+    """Fetch existing orders when available, ignoring API/mock edge cases."""
+    getter = getattr(trading_client, "get_orders", None)
+    if getter is None:
+        return []
+    try:
+        orders = getter()
+    except Exception:
+        return []
+    if isinstance(orders, (list, tuple)):
+        return list(orders)
+    try:
+        return list(orders)
+    except TypeError:
+        return []
+
+
+def available_non_margin_cash(account) -> float:
+    """Strict non-margin cash: account.cash, capped by non_marginable_buying_power.
+
+    Never uses account.buying_power, which includes 2x Reg-T margin.
+    """
+    try:
+        cash = float(getattr(account, "cash", 0.0))
+    except (TypeError, ValueError):
+        cash = 0.0
+
+    raw_non_margin = getattr(account, "non_marginable_buying_power", None)
+    if raw_non_margin is not None:
+        try:
+            cash = min(cash, float(raw_non_margin))
+        except (TypeError, ValueError):
+            pass
+    return cash
+
+
 def fetch_market_data() -> dict[str, float]:
     import yfinance as yf
 
@@ -291,34 +389,64 @@ def run_discipline_cycle(
     mock_positions: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Execute one full Discipline Bot cycle."""
-    # 1. Calendar Guard (hard check at the very beginning)
-    now = current_date or datetime.now()
-    if now.day > 7:
-        print("Not the first week of the month. Skipping.")
-        return {
-            "status": "SKIPPED_CALENDAR_GUARD",
-            "reason": "Not the first week of the month. Skipping.",
-            "orders_submitted": [],
-        }
-
     # Hard Paper Assertion
     assert_paper_mode(paper)
 
     if trading_client is None:
         trading_client = build_trading_client(paper=paper)
 
-    # 2. Strict Idempotency Check
-    activities = get_account_activities(trading_client)
-    if has_filled_this_month(activities, current_date=now):
-        print(f"Idempotency guard: An order with client_order_id='{format_client_order_id(now)}' has already filled this month.")
-        print("Cycle aborted. No orders will be placed.")
+    # 1. Market Clock Guard in US Eastern Time
+    clock = trading_client.get_clock()
+    et_now = eastern_now(clock=clock, current_date=current_date)
+    if not getattr(clock, "is_open", False):
+        message = (
+            f"Market is closed at {et_now:%Y-%m-%d %H:%M %Z}. Skipping; "
+            "the next open market day this ISO week will execute."
+        )
+        print(message)
         return {
-            "status": "ABORTED_ALREADY_FILLED",
-            "reason": f"Order already filled with client_order_id={format_client_order_id(now)}",
+            "status": "SKIPPED_MARKET_CLOSED",
+            "reason": message,
             "orders_submitted": [],
         }
 
-    # 3. Market Data & 52-Week High Drawdown
+    # 2. Strict ISO-Week Idempotency Check
+    expected_cid = format_client_order_id(et_now)
+    activities = get_account_activities(trading_client)
+    existing_orders = get_existing_orders(trading_client)
+    if has_filled_this_week(activities, current_date=et_now) or has_existing_week_order(
+        existing_orders, current_date=et_now
+    ):
+        message = (
+            f"Idempotency guard: client_order_id='{expected_cid}' already "
+            "executed this ISO week. Cycle aborted; no orders will be placed."
+        )
+        print(message)
+        return {
+            "status": "ABORTED_ALREADY_FILLED",
+            "reason": message,
+            "orders_submitted": [],
+        }
+
+    # 3. Account Equity & Strict Non-Margin Cash
+    account = trading_client.get_account()
+    equity = float(account.equity)
+    available_cash = available_non_margin_cash(account)
+
+    if available_cash < MIN_CASH_TO_DEPLOY:
+        message = (
+            f"Insufficient non-margin cash (${available_cash:,.2f} < "
+            f"${MIN_CASH_TO_DEPLOY:.2f}). Skipping without placing an order."
+        )
+        print(message)
+        return {
+            "status": "SKIPPED_INSUFFICIENT_CASH",
+            "reason": message,
+            "orders_submitted": [],
+            "available_cash": available_cash,
+        }
+
+    # 4. Market Data & 52-Week High Drawdown
     prices = mock_prices or fetch_market_data()
     spy_close = prices["SPY"]
     spy_high = prices["SPY_52W_HIGH"]
@@ -326,12 +454,10 @@ def run_discipline_cycle(
 
     drawdown_pct = (spy_close - spy_high) / spy_high
     multiplier = calculate_dip_multiplier(spy_close, spy_high)
-    deposit = calculate_deposit_amount(base_deposit, spy_close, spy_high)
+    scaled_deposit = calculate_deposit_amount(base_deposit, spy_close, spy_high)
+    deploy_amount = math.floor(min(scaled_deposit, available_cash) * 100) / 100
 
-    # 4. Account Equity & Current Positions
-    account = trading_client.get_account()
-    equity = float(account.equity)
-
+    # 5. Current Positions
     if mock_positions is not None:
         spy_qty = float(mock_positions.get("SPY", 0.0))
         tlt_qty = float(mock_positions.get("TLT", 0.0))
@@ -345,12 +471,11 @@ def run_discipline_cycle(
         spy_value = float(getattr(spy_pos, "market_value", 0.0) or 0.0)
         tlt_value = float(getattr(tlt_pos, "market_value", 0.0) or 0.0)
 
-    # 5. Plan Rebalance with client_order_id
-    expected_cid = format_client_order_id(now)
+    # 6. Plan Rebalance with cash-capped deployment
     plan = plan_rebalance(
         spy_value=spy_value,
         tlt_value=tlt_value,
-        deposit=deposit,
+        deposit=deploy_amount,
         client_order_id=expected_cid,
     )
 
@@ -367,7 +492,8 @@ def run_discipline_cycle(
     print(f"SPY 52-Week High:    ${spy_high:.2f}")
     print(f"Drawdown from High:  {drawdown_pct:.2%}")
     print(f"Dip Multiplier:      {multiplier:.2f}x (Base: ${base_deposit:.2f})")
-    print(f"Deposit to Deploy:   ${deposit:.2f}")
+    print(f"Non-Margin Cash:     ${available_cash:,.2f}")
+    print(f"Weekly Deposit:      ${scaled_deposit:,.2f} (cash-capped: ${deploy_amount:,.2f})")
     print(f"Underweight Asset:   {plan.underweight_asset}")
     print(f"Client Order ID:     {expected_cid}")
     print("-" * 65)
@@ -385,7 +511,9 @@ def run_discipline_cycle(
             "status": "DRY_RUN",
             "plan": plan,
             "orders_submitted": [],
-            "deposit": deposit,
+            "deposit": scaled_deposit,
+            "deployed": deploy_amount,
+            "available_cash": available_cash,
             "multiplier": multiplier,
             "client_order_id": expected_cid,
         }
@@ -423,7 +551,9 @@ def run_discipline_cycle(
         "status": "SUCCESS",
         "plan": plan,
         "orders_submitted": submitted_orders,
-        "deposit": deposit,
+        "deposit": scaled_deposit,
+        "deployed": deploy_amount,
+        "available_cash": available_cash,
         "multiplier": multiplier,
         "client_order_id": expected_cid,
     }
@@ -449,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
         "--base-deposit",
         type=float,
         default=BASE_DEPOSIT,
-        help=f"Base monthly deposit amount in USD (default: {BASE_DEPOSIT}).",
+        help=f"Base weekly deposit amount in USD (default: {BASE_DEPOSIT}).",
     )
 
     args = parser.parse_args(argv)
