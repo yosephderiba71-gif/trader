@@ -1,0 +1,48 @@
+name: trial24-monthly
+
+on:
+  schedule:
+    # 20:35 UTC every weekday. The runner enforces the first-trading-day guard.
+    - cron: "35 20 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run in dry-run mode (no orders placed)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trial24-monthly
+  cancel-in-progress: false
+
+jobs:
+  trial24:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Trial #24 monthly rebalance
+        env:
+          TRIAL24_ALPACA_API_KEY: ${{ secrets.TRIAL24_ALPACA_API_KEY }}
+          TRIAL24_ALPACA_SECRET_KEY: ${{ secrets.TRIAL24_ALPACA_SECRET_KEY }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            python -m momentum_bot.trial24_experimental --dry-run
+          else
+            python -m momentum_bot.trial24_experimental --execute
+          fi
