@@ -62,6 +62,7 @@ ACTIVE_ORDER_STATUSES = frozenset(
     {"filled", "partially_filled", "new", "accepted", "pending_new", "held"}
 )
 TERMINAL_FAILURE_STATUSES = frozenset({"rejected", "canceled", "expired"})
+MAX_WEEKLY_RETRIES = 3
 MAX_WEEKLY_RETRY_SUFFIX = 100
 
 
@@ -95,6 +96,11 @@ class WeekIdempotencyState:
     prior_failed_attempt: bool
     blocking_client_order_ids: tuple[str, ...] = ()
     failed_client_order_ids: tuple[str, ...] = ()
+    failed_attempt_ids: tuple[str, ...] = ()
+
+    @property
+    def failed_attempt_count(self) -> int:
+        return len(self.failed_attempt_ids)
 
 
 def _as_eastern(dt: datetime, naive_tz: ZoneInfo | timezone = timezone.utc) -> datetime:
@@ -293,6 +299,15 @@ def _matching_client_order_ids(items: list[Any], base: str) -> set[str]:
     return ids
 
 
+def _attempt_id(client_order_id: str, base: str) -> str:
+    """Collapse a buy/sell pair to one weekly attempt root (base, _r1, _r2)."""
+    if client_order_id == base:
+        return base
+    if client_order_id.endswith("_sell"):
+        return client_order_id[: -len("_sell")]
+    return client_order_id
+
+
 def next_week_client_order_id(
     orders: list[Any] | None = None,
     activities: list[Any] | None = None,
@@ -351,6 +366,8 @@ def assess_week_idempotency(
         else:
             failed.add(cid)
 
+    failed_attempt_ids = {_attempt_id(cid, base) for cid in failed}
+
     return WeekIdempotencyState(
         base_client_order_id=base,
         next_client_order_id=next_week_client_order_id(
@@ -360,6 +377,7 @@ def assess_week_idempotency(
         prior_failed_attempt=bool(failed),
         blocking_client_order_ids=tuple(sorted(blocking)),
         failed_client_order_ids=tuple(sorted(failed)),
+        failed_attempt_ids=tuple(sorted(failed_attempt_ids)),
     )
 
 
@@ -570,6 +588,21 @@ def run_discipline_cycle(
             "orders_submitted": [],
         }
 
+    if idempotency.failed_attempt_count >= MAX_WEEKLY_RETRIES:
+        attempts = ", ".join(idempotency.failed_attempt_ids)
+        message = (
+            f"Retry limit reached: {idempotency.failed_attempt_count} prior "
+            f"terminal-failed attempt IDs for {idempotency.base_client_order_id} "
+            f"({attempts}). No order submitted; manual review required."
+        )
+        print(message)
+        return {
+            "status": "ABORTED_MAX_RETRIES_EXCEEDED",
+            "reason": message,
+            "orders_submitted": [],
+            "failed_attempt_ids": list(idempotency.failed_attempt_ids),
+        }
+
     order_client_order_id = idempotency.next_client_order_id
     if idempotency.prior_failed_attempt:
         failed_ids = ", ".join(idempotency.failed_client_order_ids)
@@ -735,11 +768,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     is_dry_run = not args.execute
 
-    run_discipline_cycle(
+    result = run_discipline_cycle(
         paper=True,
         dry_run=is_dry_run,
         base_deposit=args.base_deposit,
     )
+    if result["status"] == "ABORTED_MAX_RETRIES_EXCEEDED":
+        return 1
     return 0
 
 

@@ -14,11 +14,21 @@ The model is intentionally simple and observational:
   (the interpolated spot where total net GEX crosses from negative to
   positive).
 
+Embedded dealer-positioning assumption (not observed data):
+    Net GEX = Call GEX - Put GEX treats dealers as net long calls (positive,
+    stabilizing gamma) and net short puts (negative, amplifying gamma), the
+    standard index-put-hedging convention. Open interest alone does not reveal
+    true dealer direction: calls and puts can be held by either side of the
+    trade. The sign is therefore an assumption, not measured dealer inventory.
+
 No broker APIs, order paths, or API keys are used. The only write is the
-deduplicated daily snapshot CSV under ``data/gex_history.csv``.
+deduplicated daily snapshot CSV under ``data/gex_history.csv``. Running
+``python -m market_tools.gex_calculator`` collects and logs one snapshot for
+headless weekday cron/GitHub Actions use.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import math
 import os
@@ -201,7 +211,13 @@ def calculate_strike_gex(
     days_until_expiry: int | float,
     risk_free_rate: float = RISK_FREE_RATE,
 ) -> list[StrikeGex]:
-    """Compute per-strike Net GEX at the current spot."""
+    """Compute per-strike Net GEX at the current spot.
+
+    Uses Net GEX = Call GEX - Put GEX, which assumes dealers are net long
+    calls (stabilizing) and net short puts (amplifying). Open interest does
+    not reveal true dealer positioning; this is a convention, not an observed
+    inventory.
+    """
     if spot <= 0 or not math.isfinite(spot):
         raise ValueError("Spot price must be a positive finite number.")
 
@@ -585,3 +601,31 @@ def collect_gex_snapshot(
 
     log_gex_snapshot(snapshot, history_path)
     return snapshot
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Collect and log one snapshot for headless weekday cron jobs."""
+    parser = argparse.ArgumentParser(
+        description="Collect and log one read-only SPY GEX snapshot."
+    )
+    parser.add_argument("--symbol", default=DEFAULT_SYMBOL)
+    parser.add_argument("--history-path", default=str(DEFAULT_HISTORY_PATH))
+    args = parser.parse_args(argv)
+
+    snapshot = collect_gex_snapshot(
+        symbol=args.symbol,
+        history_path=args.history_path,
+    )
+    print(
+        f"{snapshot.symbol} GEX {snapshot.status} date={snapshot.date_et} "
+        f"expiration={snapshot.expiration} spot={snapshot.spot} "
+        f"net_gex_total={snapshot.net_gex_total} logged_to={args.history_path}"
+    )
+    if snapshot.status != STATUS_OK:
+        print(f"GEX fetch error: {snapshot.error_message}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

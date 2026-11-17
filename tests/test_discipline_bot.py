@@ -19,6 +19,7 @@ from discipline_bot.execute import (
     get_existing_orders,
     has_existing_week_order,
     has_filled_this_week,
+    main,
     plan_rebalance,
     run_discipline_cycle,
 )
@@ -582,3 +583,46 @@ def test_terminal_failure_with_partial_fill_still_blocks():
         filled_qty="0.5",
     )
     assert has_existing_week_order([partial], current_date=current_dt) is True
+
+
+def test_three_terminal_failures_abort_with_max_retries_exceeded():
+    """Base, _r1, and _r2 all failing terminally must stop further retries."""
+    base = "discipline_2026W45"
+    client = make_client(
+        orders=[
+            SimpleNamespace(
+                client_order_id=base, status="rejected", filled_qty="0"
+            ),
+            SimpleNamespace(
+                client_order_id=f"{base}_r1", status="canceled", filled_qty="0"
+            ),
+            SimpleNamespace(
+                client_order_id=f"{base}_r2", status="expired", filled_qty="0"
+            ),
+        ]
+    )
+
+    result = run_discipline_cycle(
+        trading_client=client,
+        paper=True,
+        dry_run=False,
+        base_deposit=BASE_DEPOSIT,
+        current_date=datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc),
+        mock_prices=MARKET_PRICES,
+        mock_positions=POSITIONS,
+    )
+
+    assert result["status"] == "ABORTED_MAX_RETRIES_EXCEEDED"
+    assert result["orders_submitted"] == []
+    assert "Retry limit reached" in result["reason"]
+    assert "3 prior" in result["reason"]
+    client.submit_order.assert_not_called()
+
+
+def test_main_returns_nonzero_on_max_retries_exceeded(monkeypatch):
+    """GitHub Actions must see a failed run when the retry cap is hit."""
+    monkeypatch.setattr(
+        "discipline_bot.execute.run_discipline_cycle",
+        lambda **kwargs: {"status": "ABORTED_MAX_RETRIES_EXCEEDED"},
+    )
+    assert main([]) == 1

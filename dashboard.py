@@ -50,7 +50,11 @@ def _render_gex_section() -> None:
     st.caption(
         "Read-only observational view of the nearest non-expired SPY option chain. "
         "A dated snapshot is written once per US Eastern day to "
-        f"`{DEFAULT_HISTORY_PATH.parent.name}/{DEFAULT_HISTORY_PATH.name}`."
+        f"`{DEFAULT_HISTORY_PATH.parent.name}/{DEFAULT_HISTORY_PATH.name}`. "
+        "**Sign assumption:** Net GEX = Call GEX − Put GEX assumes dealers are "
+        "net long calls (stabilizing positive gamma) and net short puts "
+        "(amplifying negative gamma), the standard index-put-hedging convention. "
+        "Open interest alone does not reveal true dealer direction."
     )
 
     cache = st.session_state.get("gex_snapshot_cache")

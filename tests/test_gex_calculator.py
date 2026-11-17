@@ -9,10 +9,12 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+import market_tools.gex_calculator as gex_calculator
 from market_tools.gex_calculator import (
     HISTORY_COLUMNS,
     STATUS_FETCH_ERROR,
     STATUS_OK,
+    GexInputs,
     GexSnapshot,
     aggregate_net_gex_at_spot,
     black_scholes_gamma,
@@ -278,3 +280,27 @@ def test_repeated_fetch_errors_do_not_duplicate_the_date(tmp_path):
     assert len(rows) == 1
     assert rows[0]["status"] == STATUS_FETCH_ERROR
     assert "timed out" in rows[0]["error_message"]
+
+
+def test_cli_main_collects_and_logs_snapshot(tmp_path, monkeypatch, capsys):
+    """The headless CLI entrypoint collects and writes the daily CSV row."""
+
+    def fake_fetch_gex_inputs(symbol, ticker_factory=None, now_et=None):
+        return GexInputs(
+            symbol=symbol,
+            spot=500.0,
+            expiration=EXPIRATION,
+            calls=_calls(),
+            puts=_puts(),
+        )
+
+    monkeypatch.setattr(gex_calculator, "fetch_gex_inputs", fake_fetch_gex_inputs)
+    path = tmp_path / "gex_history.csv"
+
+    assert gex_calculator.main(["--history-path", str(path)]) == 0
+
+    rows = load_gex_history(path)
+    assert len(rows) == 1
+    assert rows[0]["status"] == STATUS_OK
+    assert rows[0]["spot"] != ""
+    assert "OK" in capsys.readouterr().out
