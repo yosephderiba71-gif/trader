@@ -18,9 +18,13 @@ Specifications:
   1. Market Clock Guard: Only execute while the US market is open, based on the
      timestamp converted to America/New_York. Never use naive UTC datetime.now().
   2. Client Order ID: Tag order with client_order_id=f"discipline_{ISOYEAR}W{ISOWEEK:02d}".
-  3. Strict Idempotency: Query Alpaca Activity API (`get_activities`) and open
-     orders. ONLY match orders where client_order_id exactly matches
-     discipline_{ISOYEAR}W{ISOWEEK:02d}. Ignore manual trades and dividends.
+  3. Strict Idempotency: Query Alpaca FILL activities and ALL orders (open and
+     closed). Match the weekly prefix discipline_{ISOYEAR}W{ISOWEEK:02d} (and
+     its _rN/_sell suffixes). A week is only completed/in-flight when a FILL
+     activity or an order with a fill/open status exists. A rejected, canceled,
+     or expired order with zero filled quantity does not block a retry; the
+     retry uses a non-colliding _r1/_r2 suffix because Alpaca client_order_ids
+     remain unique even after terminal failure. Ignore manual trades/dividends.
   4. Non-Margin Cash Guard: Only account.cash (optionally min'd with
      non_marginable_buying_power) may fund orders; never account.buying_power.
      Cap the buy notional at min(scaled_deposit, available_cash); skip cleanly
@@ -54,6 +58,12 @@ DIP_15_MULTIPLIER = 1.25
 DIP_25_MULTIPLIER = 1.50
 MIN_CASH_TO_DEPLOY = 1.00
 
+ACTIVE_ORDER_STATUSES = frozenset(
+    {"filled", "partially_filled", "new", "accepted", "pending_new", "held"}
+)
+TERMINAL_FAILURE_STATUSES = frozenset({"rejected", "canceled", "expired"})
+MAX_WEEKLY_RETRY_SUFFIX = 100
+
 
 @dataclass(frozen=True)
 class BotOrder:
@@ -75,6 +85,16 @@ class RebalancePlan:
     requires_sell_rebalance: bool
     buy_orders: list[BotOrder]
     sell_orders: list[BotOrder]
+
+
+@dataclass(frozen=True)
+class WeekIdempotencyState:
+    base_client_order_id: str
+    next_client_order_id: str
+    already_executed_or_in_flight: bool
+    prior_failed_attempt: bool
+    blocking_client_order_ids: tuple[str, ...] = ()
+    failed_client_order_ids: tuple[str, ...] = ()
 
 
 def _as_eastern(dt: datetime, naive_tz: ZoneInfo | timezone = timezone.utc) -> datetime:
@@ -216,36 +236,144 @@ def plan_rebalance(
     )
 
 
+def _field(item: Any, name: str, default: Any = None) -> Any:
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _normalized(value: Any) -> str:
+    if hasattr(value, "value"):
+        value = value.value
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _filled_quantity(order: Any) -> float:
+    raw = _field(order, "filled_qty")
+    if raw is None:
+        raw = _field(order, "filled_quantity")
+    if raw is None:
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return math.nan
+
+
+def matches_week_client_order_id(client_order_id: Any, base: str) -> bool:
+    """Match the weekly base ID itself or any bot suffix such as _r1/_sell."""
+    return isinstance(client_order_id, str) and (
+        client_order_id == base or client_order_id.startswith(f"{base}_")
+    )
+
+
+def order_blocks_week(order: Any) -> bool:
+    """Return True unless the order is a zero-fill terminal failure.
+
+    A canceled/rejected/expired order that actually filled any quantity still
+    blocks. Unknown or missing statuses are treated conservatively as blocking.
+    """
+    status = _normalized(_field(order, "status"))
+    if status in ACTIVE_ORDER_STATUSES:
+        return True
+    if status in TERMINAL_FAILURE_STATUSES:
+        filled = _filled_quantity(order)
+        return not math.isfinite(filled) or filled > 0
+    return True
+
+
+def _matching_client_order_ids(items: list[Any], base: str) -> set[str]:
+    ids: set[str] = set()
+    for item in items:
+        cid = _field(item, "client_order_id")
+        if matches_week_client_order_id(cid, base):
+            ids.add(cid)
+    return ids
+
+
+def next_week_client_order_id(
+    orders: list[Any] | None = None,
+    activities: list[Any] | None = None,
+    current_date: date | datetime | None = None,
+) -> str:
+    """Return a non-colliding client_order_id for this ISO week.
+
+    Alpaca keeps client_order_ids unique even after cancellation/rejection, so
+    a retry after terminal failure advances to _r1, _r2, and so on. Both the
+    buy ID and its _sell companion are checked to avoid collisions.
+    """
+    base = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
+    existing = _matching_client_order_ids(
+        [*list(orders or []), *list(activities or [])], base
+    )
+    if base not in existing and f"{base}_sell" not in existing:
+        return base
+
+    for suffix in range(1, MAX_WEEKLY_RETRY_SUFFIX + 1):
+        candidate = f"{base}_r{suffix}"
+        if candidate not in existing and f"{candidate}_sell" not in existing:
+            return candidate
+
+    raise RuntimeError(
+        f"Unable to find a non-colliding client_order_id for {base} after "
+        f"{MAX_WEEKLY_RETRY_SUFFIX} retries."
+    )
+
+
+def assess_week_idempotency(
+    activities: list[Any] | None = None,
+    orders: list[Any] | None = None,
+    current_date: date | datetime | None = None,
+) -> WeekIdempotencyState:
+    """Classify this ISO week as completed/in-flight, retryable, or unused."""
+    activities = list(activities or [])
+    orders = list(orders or [])
+    base = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
+
+    blocking: set[str] = set()
+    failed: set[str] = set()
+
+    for activity in activities:
+        if _normalized(_field(activity, "activity_type")) != "fill":
+            continue
+        cid = _field(activity, "client_order_id")
+        if matches_week_client_order_id(cid, base):
+            blocking.add(cid)
+
+    for order in orders:
+        cid = _field(order, "client_order_id")
+        if not matches_week_client_order_id(cid, base):
+            continue
+        if order_blocks_week(order):
+            blocking.add(cid)
+        else:
+            failed.add(cid)
+
+    return WeekIdempotencyState(
+        base_client_order_id=base,
+        next_client_order_id=next_week_client_order_id(
+            orders=orders, activities=activities, current_date=current_date
+        ),
+        already_executed_or_in_flight=bool(blocking),
+        prior_failed_attempt=bool(failed),
+        blocking_client_order_ids=tuple(sorted(blocking)),
+        failed_client_order_ids=tuple(sorted(failed)),
+    )
+
+
 def has_filled_this_week(
     activities: list[Any],
     current_date: date | datetime | None = None,
 ) -> bool:
-    """Strict weekly idempotency check.
-
-    ONLY looks for filled orders where client_order_id exactly matches
-    discipline_{ISO_YEAR}W{ISO_WEEK:02d}. Ignores manual trades or dividends.
-    """
-    expected_client_order_id = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
-
-    for act in activities:
-        act_type = (
-            act.get("activity_type")
-            if isinstance(act, dict)
-            else getattr(act, "activity_type", None)
-        )
-        # Ignore dividends, corporate actions, non-fill activities
-        if str(act_type).upper() != "FILL":
+    """Return True when a bot FILL activity matches this ISO week's prefix."""
+    base = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
+    for activity in activities:
+        if _normalized(_field(activity, "activity_type")) != "fill":
             continue
-
-        cid = (
-            act.get("client_order_id")
-            if isinstance(act, dict)
-            else getattr(act, "client_order_id", None)
-        )
-        # Strict match: only abort if client_order_id matches the ISO-week tag
-        if cid == expected_client_order_id:
+        if matches_week_client_order_id(_field(activity, "client_order_id"), base):
             return True
-
     return False
 
 
@@ -253,18 +381,13 @@ def has_existing_week_order(
     orders: list[Any],
     current_date: date | datetime | None = None,
 ) -> bool:
-    """Return True if an order already carries this ISO week's client_order_id."""
-    expected_client_order_id = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
-
+    """Return True if a fill/open order matches this ISO week's prefix."""
+    base = format_client_order_id(current_date or datetime.now(EASTERN_TZ))
     for order in orders:
-        cid = (
-            order.get("client_order_id")
-            if isinstance(order, dict)
-            else getattr(order, "client_order_id", None)
-        )
-        if cid == expected_client_order_id:
+        if matches_week_client_order_id(
+            _field(order, "client_order_id"), base
+        ) and order_blocks_week(order):
             return True
-
     return False
 
 
@@ -319,16 +442,34 @@ def get_account_activities(trading_client) -> list[Any]:
 
 
 def get_existing_orders(trading_client) -> list[Any]:
-    """Fetch existing orders when available, ignoring API/mock edge cases."""
+    """Fetch ALL orders (open and closed) so terminal failures are visible.
+
+    Alpaca's unfiltered GET /orders defaults to open orders only, so request
+    QueryOrderStatus.ALL explicitly. Fall back to a no-argument get_orders()
+    for older/custom clients, and ignore API/mock edge cases.
+    """
     getter = getattr(trading_client, "get_orders", None)
     if getter is None:
         return []
+
     try:
-        orders = getter()
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        orders = getter(
+            GetOrdersRequest(status=QueryOrderStatus.ALL, limit=500)
+        )
     except Exception:
-        return []
+        try:
+            orders = getter()
+        except Exception:
+            return []
+
     if isinstance(orders, (list, tuple)):
         return list(orders)
+    if isinstance(orders, dict):
+        nested = orders.get("orders")
+        return list(nested) if isinstance(nested, (list, tuple)) else []
     try:
         return list(orders)
     except TypeError:
@@ -411,15 +552,16 @@ def run_discipline_cycle(
         }
 
     # 2. Strict ISO-Week Idempotency Check
-    expected_cid = format_client_order_id(et_now)
     activities = get_account_activities(trading_client)
     existing_orders = get_existing_orders(trading_client)
-    if has_filled_this_week(activities, current_date=et_now) or has_existing_week_order(
-        existing_orders, current_date=et_now
-    ):
+    idempotency = assess_week_idempotency(
+        activities, existing_orders, current_date=et_now
+    )
+    if idempotency.already_executed_or_in_flight:
+        blocked_by = ", ".join(idempotency.blocking_client_order_ids)
         message = (
-            f"Idempotency guard: client_order_id='{expected_cid}' already "
-            "executed this ISO week. Cycle aborted; no orders will be placed."
+            f"Idempotency guard: {blocked_by} already filled or active/open "
+            "this ISO week. Cycle aborted; no orders will be placed."
         )
         print(message)
         return {
@@ -427,6 +569,14 @@ def run_discipline_cycle(
             "reason": message,
             "orders_submitted": [],
         }
+
+    order_client_order_id = idempotency.next_client_order_id
+    if idempotency.prior_failed_attempt:
+        failed_ids = ", ".join(idempotency.failed_client_order_ids)
+        print(
+            f"Retry: prior terminal failure(s) for {failed_ids}; using "
+            f"non-colliding client_order_id='{order_client_order_id}'."
+        )
 
     # 3. Account Equity & Strict Non-Margin Cash
     account = trading_client.get_account()
@@ -476,7 +626,7 @@ def run_discipline_cycle(
         spy_value=spy_value,
         tlt_value=tlt_value,
         deposit=deploy_amount,
-        client_order_id=expected_cid,
+        client_order_id=order_client_order_id,
     )
 
     # Print Summary Report
@@ -495,7 +645,7 @@ def run_discipline_cycle(
     print(f"Non-Margin Cash:     ${available_cash:,.2f}")
     print(f"Weekly Deposit:      ${scaled_deposit:,.2f} (cash-capped: ${deploy_amount:,.2f})")
     print(f"Underweight Asset:   {plan.underweight_asset}")
-    print(f"Client Order ID:     {expected_cid}")
+    print(f"Client Order ID:     {order_client_order_id}")
     print("-" * 65)
     print("Planned Orders:")
     for order in plan.buy_orders:
@@ -515,7 +665,7 @@ def run_discipline_cycle(
             "deployed": deploy_amount,
             "available_cash": available_cash,
             "multiplier": multiplier,
-            "client_order_id": expected_cid,
+            "client_order_id": order_client_order_id,
         }
 
     # 6. Order Execution with Client Order ID
@@ -529,7 +679,7 @@ def run_discipline_cycle(
             notional=round(order.notional, 2),
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
-            client_order_id=order.client_order_id or f"{expected_cid}_sell",
+            client_order_id=order.client_order_id or f"{order_client_order_id}_sell",
         )
         sub = trading_client.submit_order(req)
         submitted_orders.append(sub)
@@ -541,7 +691,7 @@ def run_discipline_cycle(
             notional=round(order.notional, 2),
             side=OrderSide.BUY,
             time_in_force=TimeInForce.DAY,
-            client_order_id=order.client_order_id or expected_cid,
+            client_order_id=order.client_order_id or order_client_order_id,
         )
         sub = trading_client.submit_order(req)
         submitted_orders.append(sub)
@@ -555,7 +705,7 @@ def run_discipline_cycle(
         "deployed": deploy_amount,
         "available_cash": available_cash,
         "multiplier": multiplier,
-        "client_order_id": expected_cid,
+        "client_order_id": order_client_order_id,
     }
 
 

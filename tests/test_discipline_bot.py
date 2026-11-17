@@ -16,6 +16,8 @@ from discipline_bot.execute import (
     calculate_dip_multiplier,
     eastern_now,
     format_client_order_id,
+    get_existing_orders,
+    has_existing_week_order,
     has_filled_this_week,
     plan_rebalance,
     run_discipline_cycle,
@@ -421,3 +423,162 @@ def test_insufficient_cash_skips_cleanly():
     assert result["orders_submitted"] == []
     assert "Insufficient non-margin cash" in result["reason"]
     client.submit_order.assert_not_called()
+
+
+def test_idempotency_prefix_matches_retry_and_sell_suffixes():
+    """Retry and sell suffixes share the ISO-week prefix; lookalikes do not."""
+    current_dt = datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc)  # 2026-W45
+
+    for cid in (
+        "discipline_2026W45_r1",
+        "discipline_2026W45_r2_sell",
+        "discipline_2026W45_sell",
+    ):
+        fills = [SimpleNamespace(activity_type="FILL", client_order_id=cid)]
+        assert has_filled_this_week(fills, current_date=current_dt) is True
+
+    lookalike = [
+        SimpleNamespace(
+            activity_type="FILL",
+            client_order_id="discipline_2026W450",
+        )
+    ]
+    assert has_filled_this_week(lookalike, current_date=current_dt) is False
+
+
+def test_get_existing_orders_requests_all_statuses():
+    """Bulk order lookup must include closed orders (rejected/canceled/expired)."""
+
+    class FakeClient:
+        def __init__(self):
+            self.request = None
+
+        def get_orders(self, request=None):
+            self.request = request
+            return []
+
+    client = FakeClient()
+    assert get_existing_orders(client) == []
+    assert client.request is not None
+    assert client.request.status.value == "all"
+
+
+def test_get_existing_orders_supports_no_argument_client():
+    """Older/custom clients that do not accept GetOrdersRequest still work."""
+    order = SimpleNamespace(
+        client_order_id="discipline_2026W45", status="rejected", filled_qty="0"
+    )
+
+    class FakeClient:
+        def get_orders(self):
+            return [order]
+
+    assert get_existing_orders(FakeClient()) == [order]
+
+
+@pytest.mark.parametrize("status", ["rejected", "canceled", "expired"])
+def test_terminal_failure_allows_retry_with_non_colliding_client_order_id(status):
+    """A zero-fill rejected/canceled/expired Monday order must not block Tuesday."""
+    base = "discipline_2026W45"
+    client = make_client(
+        orders=[
+            SimpleNamespace(
+                client_order_id=base,
+                status=status,
+                filled_qty="0",
+            )
+        ]
+    )
+
+    result = run_discipline_cycle(
+        trading_client=client,
+        paper=True,
+        dry_run=False,
+        base_deposit=BASE_DEPOSIT,
+        current_date=datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc),
+        mock_prices=MARKET_PRICES,
+        mock_positions=POSITIONS,
+    )
+
+    assert result["status"] == "SUCCESS"
+    assert result["client_order_id"] == f"{base}_r1"
+    assert len(result["orders_submitted"]) == 1
+    client.submit_order.assert_called_once()
+    request = client.submit_order.call_args.args[0]
+    assert request.client_order_id == f"{base}_r1"
+
+
+def test_retry_suffix_advances_after_r1_terminal_failure():
+    """If _r1 also failed terminally, the next retry must use _r2."""
+    base = "discipline_2026W45"
+    client = make_client(
+        orders=[
+            SimpleNamespace(
+                client_order_id=base, status="rejected", filled_qty="0"
+            ),
+            SimpleNamespace(
+                client_order_id=f"{base}_r1", status="canceled", filled_qty="0"
+            ),
+        ]
+    )
+
+    result = run_discipline_cycle(
+        trading_client=client,
+        paper=True,
+        dry_run=False,
+        base_deposit=BASE_DEPOSIT,
+        current_date=datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc),
+        mock_prices=MARKET_PRICES,
+        mock_positions=POSITIONS,
+    )
+
+    assert result["status"] == "SUCCESS"
+    request = client.submit_order.call_args.args[0]
+    assert request.client_order_id == f"{base}_r2"
+
+
+@pytest.mark.parametrize(
+    ("status", "filled_qty"),
+    [
+        ("filled", "125"),
+        ("accepted", "0"),
+        ("new", "0"),
+        ("partially_filled", "5"),
+    ],
+)
+def test_filled_or_active_order_blocks_duplicate_execution(status, filled_qty):
+    """Filled and in-flight orders still abort the week to prevent duplicates."""
+    client = make_client(
+        orders=[
+            SimpleNamespace(
+                client_order_id="discipline_2026W45",
+                status=status,
+                filled_qty=filled_qty,
+            )
+        ]
+    )
+
+    result = run_discipline_cycle(
+        trading_client=client,
+        paper=True,
+        dry_run=False,
+        base_deposit=BASE_DEPOSIT,
+        current_date=datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc),
+        mock_prices=MARKET_PRICES,
+        mock_positions=POSITIONS,
+    )
+
+    assert result["status"] == "ABORTED_ALREADY_FILLED"
+    assert result["orders_submitted"] == []
+    client.submit_order.assert_not_called()
+
+
+def test_terminal_failure_with_partial_fill_still_blocks():
+    """A canceled/expired order with any fill is not a clean retry."""
+    current_dt = datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc)
+    partial = SimpleNamespace(
+        client_order_id="discipline_2026W45",
+        status="canceled",
+        filled_qty="0.5",
+    )
+    assert has_existing_week_order([partial], current_date=current_dt) is True
