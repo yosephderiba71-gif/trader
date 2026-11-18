@@ -13,6 +13,18 @@ from typing import Callable
 
 ALLOWED_AGENTS = frozenset({"opencode", "claude"})
 DIRTY_REPO_MESSAGE = "Error: Main repo is dirty. Commit changes first."
+DIRTY_REPO_WARNING = (
+    "Warning: Main repo has uncommitted changes. git worktree add branches "
+    "from HEAD and will not include them; continuing because --allow-dirty "
+    "was given."
+)
+TESTS_FAILING_MESSAGE = (
+    "Error: Tests on main are failing. Fix them before spawning workers."
+)
+PYTEST_PYTHON = "/Users/yosi/venvs/quantstats/bin/python"
+PYTEST_COMMAND = (PYTEST_PYTHON, "-m", "pytest", "-q")
+SQLITE_BUSY_TIMEOUT_MS = 5000
+MEMORY_DB_FILE_MODE = 0o600
 RATE_LIMIT_MAX_SPAWNS = 3
 RATE_LIMIT_WINDOW_SECONDS = 300.0
 DEFAULT_WORKERS = 2
@@ -36,17 +48,42 @@ def scrub_secrets(message: str) -> str:
     return API_KEY_PATTERN.sub("[REDACTED]", message)
 
 
+def connect_memory_db(db_path: str | Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(
+        Path(db_path),
+        timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+    )
+    connection.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    connection.execute("PRAGMA journal_mode=WAL")
+    return connection
+
+
+def secure_memory_db(db_path: str | Path) -> None:
+    path = Path(db_path)
+    for candidate in (
+        path,
+        path.with_name(f"{path.name}-wal"),
+        path.with_name(f"{path.name}-shm"),
+    ):
+        if candidate.exists():
+            candidate.chmod(MEMORY_DB_FILE_MODE)
+
+
 def init_memory_db(db_path: str | Path = DEFAULT_MEMORY_DB) -> Path:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    connection = connect_memory_db(path)
     try:
-        with sqlite3.connect(path) as connection:
+        with connection:
             connection.execute(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS agent_logs "
                 "USING fts5(timestamp, agent_name, message)"
             )
     except sqlite3.OperationalError as exc:
         raise RuntimeError("SQLite FTS5 support is required for memory.db") from exc
+    finally:
+        connection.close()
+    secure_memory_db(path)
     return path
 
 
@@ -58,11 +95,16 @@ def log_message(
     init_memory_db(db_path)
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     safe_message = scrub_secrets(message)
-    with sqlite3.connect(Path(db_path)) as connection:
-        connection.execute(
-            "INSERT INTO agent_logs(timestamp, agent_name, message) VALUES (?, ?, ?)",
-            (timestamp, agent_name, safe_message),
-        )
+    connection = connect_memory_db(db_path)
+    try:
+        with connection:
+            connection.execute(
+                "INSERT INTO agent_logs(timestamp, agent_name, message) VALUES (?, ?, ?)",
+                (timestamp, agent_name, safe_message),
+            )
+    finally:
+        connection.close()
+    secure_memory_db(Path(db_path))
 
 
 def load_spawn_timestamps(
@@ -123,12 +165,29 @@ def wait_for_rate_limit(
 def _run(
     command: list[str],
     run: Callable[..., subprocess.CompletedProcess] | None = None,
+    cwd: str | Path | None = None,
 ) -> subprocess.CompletedProcess:
     runner = run or subprocess.run
+    kwargs: dict[str, object] = {
+        "capture_output": True,
+        "text": True,
+        "check": False,
+    }
+    if cwd is not None:
+        kwargs["cwd"] = str(cwd)
     try:
-        return runner(command, capture_output=True, text=True, check=False)
+        return runner(command, **kwargs)
     except FileNotFoundError as exc:
         raise RuntimeError(f"Command not found: {command[0]}") from exc
+
+
+def tests_pass_on_main(
+    repo_root: str | Path,
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> bool:
+    repo = Path(repo_root).resolve()
+    result = _run(list(PYTEST_COMMAND), run=run, cwd=repo)
+    return result.returncode == 0
 
 
 def main_repo_is_dirty(
@@ -145,8 +204,12 @@ def main_repo_is_dirty(
 def ensure_clean_repo(
     repo_root: str | Path,
     run: Callable[..., subprocess.CompletedProcess] | None = None,
+    allow_dirty: bool = False,
 ) -> bool:
     if main_repo_is_dirty(repo_root, run=run):
+        if allow_dirty:
+            print(DIRTY_REPO_WARNING)
+            return True
         print(DIRTY_REPO_MESSAGE)
         return False
     return True
@@ -242,6 +305,7 @@ def spawn_workers(
     memory_db: str | Path = DEFAULT_MEMORY_DB,
     rate_limit_path: str | Path = DEFAULT_RATE_LIMIT_PATH,
     session_prefix: str | None = None,
+    allow_dirty: bool = False,
     run: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> list[Path]:
     validate_agent(agent)
@@ -249,7 +313,10 @@ def spawn_workers(
         raise ValueError("workers must be at least 1")
 
     repo = Path(repo_root).resolve()
-    if not ensure_clean_repo(repo, run=run):
+    if not tests_pass_on_main(repo, run=run):
+        print(TESTS_FAILING_MESSAGE)
+        return []
+    if not ensure_clean_repo(repo, run=run, allow_dirty=allow_dirty):
         return []
 
     init_memory_db(memory_db)
@@ -382,6 +449,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Kill tmux sessions and remove worker worktrees",
     )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help=(
+            "Proceed even if the main repo has uncommitted changes "
+            "(pytest must still pass)"
+        ),
+    )
     return parser
 
 
@@ -397,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
         agent=args.agent,
         workers=args.workers,
         command=args.worker_command,
+        allow_dirty=args.allow_dirty,
     )
     return 0 if spawned else 1
 

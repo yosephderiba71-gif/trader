@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import stat
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -32,6 +33,11 @@ def test_main_rejects_unsupported_agent():
 def test_dirty_repo_aborts_before_spawning(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         orchestrator,
+        "tests_pass_on_main",
+        lambda repo_root, run=None: True,
+    )
+    monkeypatch.setattr(
+        orchestrator,
         "main_repo_is_dirty",
         lambda repo_root, run=None: True,
     )
@@ -48,6 +54,125 @@ def test_dirty_repo_aborts_before_spawning(monkeypatch, tmp_path, capsys):
     assert capsys.readouterr().out.strip() == orchestrator.DIRTY_REPO_MESSAGE
     assert not (tmp_path / "memory.db").exists()
     assert not (tmp_path / "rate_limits.json").exists()
+
+
+def test_init_memory_db_uses_wal_busy_timeout_and_restrictive_permissions(tmp_path):
+    db_path = tmp_path / "memory.db"
+
+    assert orchestrator.init_memory_db(db_path) == db_path
+
+    with sqlite3.connect(db_path) as raw_connection:
+        journal_mode = raw_connection.execute("PRAGMA journal_mode").fetchone()[0]
+    assert journal_mode.lower() == "wal"
+
+    connection = orchestrator.connect_memory_db(db_path)
+    try:
+        busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
+    finally:
+        connection.close()
+    assert busy_timeout == orchestrator.SQLITE_BUSY_TIMEOUT_MS
+
+    assert stat.S_IMODE(db_path.stat().st_mode) == orchestrator.MEMORY_DB_FILE_MODE
+    assert orchestrator.MEMORY_DB_FILE_MODE == 0o600
+
+
+def test_tests_pass_on_main_runs_exact_pytest_command_in_repo_root(tmp_path):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return _completed()
+
+    assert orchestrator.tests_pass_on_main(tmp_path, run=fake_run) is True
+    assert calls == [
+        (
+            ["/Users/yosi/venvs/quantstats/bin/python", "-m", "pytest", "-q"],
+            {
+                "capture_output": True,
+                "text": True,
+                "check": False,
+                "cwd": str(tmp_path.resolve()),
+            },
+        )
+    ]
+
+
+def test_tests_pass_on_main_reports_failure(tmp_path):
+    def fake_run(command, **kwargs):
+        return _completed(returncode=1, stdout="1 failed")
+
+    assert orchestrator.tests_pass_on_main(tmp_path, run=fake_run) is False
+
+
+def test_failing_tests_on_main_abort_before_spawning(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        orchestrator,
+        "tests_pass_on_main",
+        lambda repo_root, run=None: False,
+    )
+
+    spawned = orchestrator.spawn_workers(
+        "opencode",
+        workers=1,
+        repo_root=tmp_path,
+        memory_db=tmp_path / "memory.db",
+        rate_limit_path=tmp_path / "rate_limits.json",
+    )
+
+    assert spawned == []
+    assert capsys.readouterr().out.strip() == (
+        "Error: Tests on main are failing. Fix them before spawning workers."
+    )
+    assert orchestrator.TESTS_FAILING_MESSAGE == (
+        "Error: Tests on main are failing. Fix them before spawning workers."
+    )
+    assert not (tmp_path / "memory.db").exists()
+    assert not (tmp_path / "rate_limits.json").exists()
+
+
+def test_allow_dirty_warns_and_spawns_when_tests_pass(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        orchestrator,
+        "tests_pass_on_main",
+        lambda repo_root, run=None: True,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "main_repo_is_dirty",
+        lambda repo_root, run=None: True,
+    )
+    worktree = tmp_path / "trading-agent-w1"
+    worktree.mkdir()
+    monkeypatch.setattr(
+        orchestrator,
+        "create_worktree",
+        lambda repo_root, worker_index, **kwargs: worktree,
+    )
+
+    def fake_run(command, **kwargs):
+        return _completed()
+
+    spawned = orchestrator.spawn_workers(
+        "opencode",
+        workers=1,
+        repo_root=tmp_path,
+        memory_db=tmp_path / "memory.db",
+        rate_limit_path=tmp_path / "rate_limits.json",
+        allow_dirty=True,
+        run=fake_run,
+    )
+
+    output = capsys.readouterr().out
+    assert spawned == [worktree]
+    assert orchestrator.DIRTY_REPO_WARNING in output
+    assert "Spawned opencode worker 1" in output
+
+
+def test_parser_exposes_allow_dirty_flag():
+    args = orchestrator.build_parser().parse_args(
+        ["--agent", "opencode", "--allow-dirty"]
+    )
+    assert args.allow_dirty is True
 
 
 def test_log_message_redacts_api_keys_in_fts5_table(tmp_path):
