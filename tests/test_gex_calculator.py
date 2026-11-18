@@ -19,11 +19,15 @@ from market_tools.gex_calculator import (
     aggregate_net_gex_at_spot,
     black_scholes_gamma,
     calculate_gex_snapshot,
+    calculate_put_call_oi_ratio,
     calculate_strike_gex,
     collect_gex_snapshot,
+    fetch_gex_inputs,
     find_call_wall,
     find_gamma_flip,
+    find_max_pain,
     find_put_wall,
+    gamma_flip_distance,
     gamma_regime,
     load_gex_history,
     log_gex_snapshot,
@@ -304,3 +308,106 @@ def test_cli_main_collects_and_logs_snapshot(tmp_path, monkeypatch, capsys):
     assert rows[0]["status"] == STATUS_OK
     assert rows[0]["spot"] != ""
     assert "OK" in capsys.readouterr().out
+
+
+def test_snapshot_includes_institutional_metrics():
+    snapshot = calculate_gex_snapshot(
+        spot=500.0,
+        expiration=EXPIRATION,
+        calls=_calls(),
+        puts=_puts(),
+        now_et=NOW_ET,
+    )
+
+    assert snapshot.put_call_oi_ratio == pytest.approx((300 + 120 + 90) / (100 + 250 + 80))
+    assert snapshot.max_pain == 480.0
+    if snapshot.gamma_flip is None:
+        assert snapshot.dealer_gamma_flip_dist is None
+    else:
+        assert snapshot.dealer_gamma_flip_dist == pytest.approx(
+            abs(500.0 - snapshot.gamma_flip)
+        )
+    assert snapshot.zero_dte_net_gex is None
+
+
+def test_zero_dte_net_gex_uses_chain_expiring_today():
+    today = NOW_ET.date().isoformat()
+
+    snapshot = calculate_gex_snapshot(
+        spot=500.0,
+        expiration=today,
+        calls=_calls(),
+        puts=_puts(),
+        now_et=NOW_ET,
+    )
+
+    assert snapshot.zero_dte_net_gex is not None
+    assert snapshot.zero_dte_net_gex == pytest.approx(snapshot.net_gex_total)
+
+
+def test_metric_helpers_handle_missing_side():
+    calls = _frame([])
+    puts = _frame([{"strike": 95.0, "openInterest": 70, "impliedVolatility": 0.21}])
+    strikes = calculate_strike_gex(100.0, calls, puts, days_until_expiry=30)
+
+    assert calculate_put_call_oi_ratio(strikes) is None
+    assert find_max_pain(strikes) == 95.0
+    assert gamma_flip_distance(100.0, None) is None
+    assert gamma_flip_distance(None, 100.0) is None
+    assert gamma_flip_distance(100.0, 103.5) == pytest.approx(3.5)
+
+
+def test_history_csv_logs_new_institutional_columns(tmp_path):
+    path = tmp_path / "gex_history.csv"
+    snapshot = calculate_gex_snapshot(
+        spot=500.0,
+        expiration=EXPIRATION,
+        calls=_calls(),
+        puts=_puts(),
+        now_et=NOW_ET,
+    )
+
+    assert log_gex_snapshot(snapshot, path) == "appended"
+    row = load_gex_history(path)[0]
+
+    assert list(row.keys()) == HISTORY_COLUMNS
+    for column in (
+        "zero_dte_net_gex",
+        "put_call_oi_ratio",
+        "max_pain",
+        "dealer_gamma_flip_dist",
+    ):
+        assert column in row
+    assert float(row["put_call_oi_ratio"]) == pytest.approx((300 + 120 + 90) / (100 + 250 + 80))
+    assert float(row["max_pain"]) == 480.0
+
+
+def test_fetch_gex_inputs_captures_same_day_chain():
+    ticker = FakeTicker(
+        spot=500.0,
+        calls=_calls(),
+        puts=_puts(),
+        expirations=(NOW_ET.date().isoformat(), EXPIRATION),
+    )
+
+    inputs = fetch_gex_inputs(
+        ticker_factory=lambda symbol: ticker,
+        now_et=NOW_ET,
+    )
+
+    assert inputs.expiration == NOW_ET.date().isoformat()
+    assert inputs.zero_dte_calls is not None
+    assert inputs.zero_dte_puts is not None
+
+
+def test_fetch_gex_inputs_has_no_zero_dte_chain_on_non_expiry_day():
+    ticker = FakeTicker(spot=500.0, calls=_calls(), puts=_puts())
+
+    inputs = fetch_gex_inputs(
+        ticker_factory=lambda symbol: ticker,
+        now_et=NOW_ET,
+    )
+
+    assert inputs.expiration == EXPIRATION
+    assert inputs.zero_dte_calls is None
+    assert inputs.zero_dte_puts is None

@@ -1,0 +1,25 @@
+name: GEX Daily Collector
+on:
+  schedule:
+    - cron: '45 19 * * 1-5' # Runs at 19:45 UTC (15:45 EST) every weekday
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run GEX Collector
+        run: python -m market_tools.gex_calculator
+      - name: Commit and Push Data
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add data/gex_history.csv
+          git commit -m "Auto-update GEX history snapshot" || echo "No changes to commit"
+          git push

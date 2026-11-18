@@ -287,6 +287,28 @@ def _render_gex_section() -> None:
     )
     metrics[4].metric("Total Net GEX", _format_gex_value(total))
 
+    detail = st.columns(4)
+    detail[0].metric(
+        "0DTE Net GEX",
+        _format_gex_value(snapshot.zero_dte_net_gex),
+    )
+    detail[1].metric(
+        "Put/Call OI",
+        f"{snapshot.put_call_oi_ratio:.2f}"
+        if snapshot.put_call_oi_ratio is not None
+        else "—",
+    )
+    detail[2].metric(
+        "Max Pain",
+        f"${snapshot.max_pain:,.2f}" if snapshot.max_pain is not None else "—",
+    )
+    detail[3].metric(
+        "Gamma Flip Dist",
+        f"${snapshot.dealer_gamma_flip_dist:,.2f}"
+        if snapshot.dealer_gamma_flip_dist is not None
+        else "—",
+    )
+
     if total is not None and total >= 0:
         st.success(f"Net GEX regime: {regime} — dealers dampen moves.")
     else:

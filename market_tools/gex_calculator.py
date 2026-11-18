@@ -62,6 +62,10 @@ HISTORY_COLUMNS = [
     "put_wall",
     "gamma_flip",
     "net_gex_total",
+    "zero_dte_net_gex",
+    "put_call_oi_ratio",
+    "max_pain",
+    "dealer_gamma_flip_dist",
     "status",
     "error_message",
 ]
@@ -90,6 +94,8 @@ class GexInputs:
     expiration: str
     calls: Any
     puts: Any
+    zero_dte_calls: Any = None
+    zero_dte_puts: Any = None
 
 
 @dataclass
@@ -107,6 +113,10 @@ class GexSnapshot:
     net_gex_total: float | None
     status: str
     error_message: str = ""
+    zero_dte_net_gex: float | None = None
+    put_call_oi_ratio: float | None = None
+    max_pain: float | None = None
+    dealer_gamma_flip_dist: float | None = None
     strikes: list[StrikeGex] = field(default_factory=list)
     risk_free_rate: float = RISK_FREE_RATE
 
@@ -278,6 +288,61 @@ def find_put_wall(strikes: Iterable[StrikeGex]) -> float | None:
     return max(candidates, key=lambda row: row.put_oi).strike
 
 
+def find_max_pain(strikes: Iterable[StrikeGex]) -> float | None:
+    """Strike with the largest total (call + put) open interest."""
+    candidates = [
+        row for row in strikes if row.call_oi + row.put_oi > 0
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda row: row.call_oi + row.put_oi).strike
+
+
+def calculate_put_call_oi_ratio(strikes: Iterable[StrikeGex]) -> float | None:
+    """Total put open interest divided by total call open interest."""
+    rows = list(strikes)
+    call_oi = sum(row.call_oi for row in rows)
+    put_oi = sum(row.put_oi for row in rows)
+    if call_oi <= 0:
+        return None
+    return put_oi / call_oi
+
+
+def gamma_flip_distance(
+    spot: float | None,
+    gamma_flip: float | None,
+) -> float | None:
+    """Absolute distance between spot and the gamma flip level."""
+    if spot is None or gamma_flip is None:
+        return None
+    if not (math.isfinite(spot) and math.isfinite(gamma_flip)):
+        return None
+    return abs(float(spot) - float(gamma_flip))
+
+
+def calculate_zero_dte_net_gex(
+    spot: float,
+    calls: Any,
+    puts: Any,
+    risk_free_rate: float = RISK_FREE_RATE,
+) -> float | None:
+    """Net GEX for options expiring today.
+
+    Returns ``None`` when no valid same-day rows are available.
+    """
+    try:
+        zero_dte_strikes = calculate_strike_gex(
+            spot=spot,
+            calls=calls,
+            puts=puts,
+            days_until_expiry=0,
+            risk_free_rate=risk_free_rate,
+        )
+    except ValueError:
+        return None
+    return float(sum(row.net_gex for row in zero_dte_strikes))
+
+
 def aggregate_net_gex_at_spot(
     strikes: Iterable[StrikeGex],
     candidate_spot: float,
@@ -436,13 +501,35 @@ def fetch_gex_inputs(
     ticker_factory: Callable[[str], Any] | None = None,
     now_et: datetime | None = None,
 ) -> GexInputs:
-    """Fetch spot, nearest expiration, and option chain via yfinance."""
+    """Fetch spot, nearest expiration, option chain, and today's 0DTE chain."""
     factory = ticker_factory or _default_ticker_factory
+    now = _et_now(now_et)
     ticker = factory(symbol)
     spot = fetch_spot_price(ticker)
-    expiration = select_nearest_expiration(getattr(ticker, "options", ()), now_et=now_et)
+    raw_options = list(getattr(ticker, "options", ()) or ())
+    expiration = select_nearest_expiration(raw_options, now_et=now)
     calls, puts = fetch_option_chain(ticker, expiration)
-    return GexInputs(symbol=symbol, spot=spot, expiration=expiration, calls=calls, puts=puts)
+
+    today_text = now.date().isoformat()
+    zero_dte_calls: Any = None
+    zero_dte_puts: Any = None
+    if expiration == today_text:
+        zero_dte_calls, zero_dte_puts = calls, puts
+    elif any(str(raw)[:10] == today_text for raw in raw_options):
+        try:
+            zero_dte_calls, zero_dte_puts = fetch_option_chain(ticker, today_text)
+        except ValueError:
+            zero_dte_calls, zero_dte_puts = None, None
+
+    return GexInputs(
+        symbol=symbol,
+        spot=spot,
+        expiration=expiration,
+        calls=calls,
+        puts=puts,
+        zero_dte_calls=zero_dte_calls,
+        zero_dte_puts=zero_dte_puts,
+    )
 
 
 def calculate_gex_snapshot(
@@ -453,6 +540,8 @@ def calculate_gex_snapshot(
     symbol: str = DEFAULT_SYMBOL,
     now_et: datetime | None = None,
     risk_free_rate: float = RISK_FREE_RATE,
+    zero_dte_calls: Any | None = None,
+    zero_dte_puts: Any | None = None,
 ) -> GexSnapshot:
     """Calculate one fully-populated GEX snapshot from already-fetched inputs."""
     now = _et_now(now_et)
@@ -475,6 +564,23 @@ def calculate_gex_snapshot(
     )
     net_gex_total = float(sum(row.net_gex for row in strikes))
 
+    if (
+        zero_dte_calls is None
+        and zero_dte_puts is None
+        and str(expiration)[:10] == now.date().isoformat()
+    ):
+        zero_dte_calls, zero_dte_puts = calls, puts
+    zero_dte_net_gex = (
+        calculate_zero_dte_net_gex(
+            spot=spot,
+            calls=zero_dte_calls,
+            puts=zero_dte_puts,
+            risk_free_rate=risk_free_rate,
+        )
+        if zero_dte_calls is not None or zero_dte_puts is not None
+        else None
+    )
+
     return GexSnapshot(
         symbol=symbol,
         date_et=now.date().isoformat(),
@@ -486,6 +592,10 @@ def calculate_gex_snapshot(
         gamma_flip=gamma_flip,
         net_gex_total=net_gex_total,
         status=STATUS_OK,
+        zero_dte_net_gex=zero_dte_net_gex,
+        put_call_oi_ratio=calculate_put_call_oi_ratio(strikes),
+        max_pain=find_max_pain(strikes),
+        dealer_gamma_flip_dist=gamma_flip_distance(spot, gamma_flip),
         strikes=strikes,
         risk_free_rate=risk_free_rate,
     )
@@ -514,6 +624,12 @@ def _snapshot_row(snapshot: GexSnapshot) -> dict[str, str]:
         "put_wall": _format_csv_number(snapshot.put_wall),
         "gamma_flip": _format_csv_number(snapshot.gamma_flip),
         "net_gex_total": _format_csv_number(snapshot.net_gex_total),
+        "zero_dte_net_gex": _format_csv_number(snapshot.zero_dte_net_gex),
+        "put_call_oi_ratio": _format_csv_number(snapshot.put_call_oi_ratio),
+        "max_pain": _format_csv_number(snapshot.max_pain),
+        "dealer_gamma_flip_dist": _format_csv_number(
+            snapshot.dealer_gamma_flip_dist
+        ),
         "status": snapshot.status,
         "error_message": snapshot.error_message,
     }
@@ -583,6 +699,8 @@ def collect_gex_snapshot(
             puts=inputs.puts,
             symbol=symbol,
             now_et=now,
+            zero_dte_calls=inputs.zero_dte_calls,
+            zero_dte_puts=inputs.zero_dte_puts,
         )
     except Exception as exc:
         snapshot = GexSnapshot(

@@ -1,82 +1,29 @@
-# Paper Trader v2
+# Institutional Quantitative Trading & Research Engine
 
-A long-only, risk-managed trading agent for Alpaca **paper** accounts. It runs as a
-stateless cycle every 15 minutes on GitHub Actions. Alpaca is the single source of truth
-for positions and orders.
+An end-to-end, institutional-grade quantitative research and execution pipeline built from scratch in Python. This repository demonstrates rigorous alpha research, fail-safe execution infrastructure, and a multi-agent AI development workflow.
 
-## What changed from v1
+## 🧠 1. Alpha Research Engine (27 Trials)
+The core philosophy of this project is that **most retail strategies are overfitted noise**. We built a rigorous testing pipeline:
+*   **Methodology:** 70/30 chronological out-of-sample splits, 10bp–20bp stress-test costs, and 1,000-run regime-matched random baselines.
+*   **Results:** 27 strategy variants (RSI(2), Heikin Ashi, 11-sector momentum, etc.) were tested. All were rejected for failing to beat the 95th percentile of random chance, proving the Efficient Market Hypothesis on a retail budget.
+*   **Artifacts:** The closest contender (Trial #24: 11-Sector Momentum) achieved a 144.5% OOS return with a -16.8% Max Drawdown (Calmar 0.86), but was rigorously rejected rather than deployed due to strict pre-registered rules.
 
-| v1 problem | v2 fix |
-|---|---|
-| A SELL signal with no position **opened a short** | Long-only. Exit signals only close existing longs. |
-| Fixed 1% stop and 2% target ignored volatility (hourly TSLA routinely moves more than 1%) | ATR-based stop and target (2× and 3× ATR) |
-| Winning strategy chosen by in-sample dollar profit, which favoured high-priced assets such as BTC | Ranked by Sharpe on the **last 30% of history only**, with gates for min trades, positive return and min Sharpe |
-| Only ~30 days of hourly data (about 150 bars per stock) | 180 days by default |
-| VWAP was cumulative from the start of history, so it drifted meaninglessly | Rolling 20-bar VWAP with a volume filter |
-| Crypto: fixed 0.01 quantity, no stop-loss, SELL rejected without a position | Crypto removed. Alpaca does not support bracket orders for crypto, so the position would be unprotected between runs |
-| Could act on the still-forming bar | Forming bar dropped |
-| Stop and target were DAY orders, so they expired at the close and left positions unprotected overnight | GTC bracket orders |
-| No check for a re-entry on the same bar after a stop-out | Order-history check per bar, plus deterministic client order IDs |
-| No daily loss limit | Entries halt after a 2% drop vs. the previous close. Exits still run. |
-| Market orders sent when the market was closed | Checks the Alpaca market clock first |
-| Dashboard keys hard-coded in the file | Environment variables only |
-| Unpinned dependencies and no tests | Tests run before every trade. A failing test blocks the cycle. |
+## 🤖 2. Production Trading Bots (Paper Only)
+*   **The Discipline Bot (Live):** An 80/20 SPY/TLT weekly rebalancer with a dip-accelerator (1.25x at >15% drawdown, 1.5x at >25%). Engineered with strict idempotency (ISO-week tags), non-margin cash guards, and DST-safe GitHub Actions cron jobs.
+*   **Trial #24 Forward Test (Live):** A fully isolated monthly sector-momentum bot running on a dedicated paper account. Tests the Top 3 11-sector rotation against a SPY+Gate benchmark over a 3-5 year horizon.
 
-## Layout
+## 🛠️ 3. Track B: Multi-Agent AI Development Workflow
+We built a $0 local AI orchestration system to parallelize software development:
+*   **Orchestrator:** Uses `tmux` and isolated `git worktrees` to spawn parallel coding agents without file collisions.
+*   **Safety Gates:** Hard `pytest` spawn gates, strict `{"opencode", "claude"}` binary allowlists, and `--allow-dirty` protection.
+*   **Memory & State:** A local SQLite database with `WAL` mode and `busy_timeout=5000` for concurrent agent memory, featuring regex secret-redaction and `chmod 600`.
+*   **Reconciliation:** An independent `reconcile.py` script that queries Alpaca directly (with zero bot imports) to detect unauthorized trades and target weight drift.
 
-```
-trader/
-  config.py      settings from environment variables
-  strategies.py  4 causal, vectorised signal generators
-  backtest.py    long-only backtester: next-bar fills, costs, intrabar stops
-  research.py    out-of-sample strategy selection
-  risk.py        position sizing and the daily loss halt (pure functions)
-  agent.py       one cycle: exits, then entries (broker injected)
-  broker.py      Alpaca orders and positions (the only write path)
-  data.py        Alpaca bars, forming-bar removal
-  cli.py         run / research / status
-dashboard.py     read-only Streamlit view
-tests/           37 tests; run with `python -m pytest`
-.github/workflows/trade.yml
-```
+## 📊 4. Proprietary GEX Data Collector
+A custom Streamlit dashboard and GitHub Action that scrapes SPY options chains daily at 15:45 EST. It calculates Black-Scholes Gamma Exposure (GEX), Call/Put Walls, and the Gamma Flip level, automatically committing a proprietary historical CSV dataset to the repo.
 
-## Setup
+## 🧪 Engineering Rigor
+*   **301 passing unit tests** covering math, look-ahead bias, idempotency, and API failure states.
+*   **Zero real-money risk:** Hard-coded `paper=True` assertions prevent live execution.
 
-1. Create a **paper** account at Alpaca and generate paper API keys.
-2. Put the keys in the repo: Settings → Secrets and variables → Actions → `ALPACA_API_KEY`, `ALPACA_API_SECRET`. The old names `ALPACA_KEY` and `ALPACA_SECRET` also work locally, but the workflow reads the new names.
-3. Run locally first:
-   ```bash
-   python -m venv .venv && source .venv/bin/activate
-   pip install -r requirements-dev.txt
-   python -m pytest -q
-   export ALPACA_API_KEY=... ALPACA_API_SECRET=...
-   python -m trader research    # what the strategies did out-of-sample
-   python -m trader run         # dry run: shows the decision, places nothing
-   ```
-4. Push to GitHub. The schedule starts on the next 15-minute mark during market hours.
-5. Run `--execute` only after several days of dry-run logs look sensible. Use the Actions tab → trader → Run workflow → tick **execute**.
-
-## Risk controls (defaults in `trader/config.py`)
-
-- Risk 1% of equity per trade, measured from entry to the ATR stop.
-- At most 20% of equity in one name and at most 3 open positions.
-- At most 1 new entry per cycle.
-- No new entries after a 2% drop versus the last close.
-- Stop: entry − 2×ATR(14). Target: entry + 3×ATR(14). Both are server-side bracket legs.
-
-## Limitations, read before trusting it
-
-- **Not verified against the live Alpaca SDK in the environment where this was written.** The strategy, sizing, backtest and cycle logic are tested (37 tests). The `broker.py` and `data.py` files use alpaca-py APIs from memory, so run `python -m trader status` and `python -m trader run` on paper and check the logs before anything else.
-- Strategy selection still carries selection bias. Out-of-sample testing reduces it but does not remove it. A backtest that looks good is a hypothesis, not evidence.
-- Runs are 15 minutes apart and use hourly bars. This is a swing-style system. It does not react to intraday moves between runs; the bracket orders handle those.
-- Scheduled workflows can start several minutes late, and GitHub may skip a run under load.
-- GitHub pauses scheduled workflows in public repos after 60 days without activity. Push a small commit now and then.
-- Free IEX data is a subset of market volume. Set `TRADER_FEED=sip` only if you have a paid data plan.
-- Do not switch `paper=True` in `broker.py` to live. Going live needs a separate decision after a long paper record, and a new review of the code.
-
-## Local dashboard
-
-```bash
-pip install -r requirements-dashboard.txt
-streamlit run dashboard.py
-```
+--------------------------------------------------
