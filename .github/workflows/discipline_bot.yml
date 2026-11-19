@@ -2,21 +2,8 @@ name: discipline-bot
 
 on:
   schedule:
-    # 17:00 UTC (12:00 EST) on days 1-7 of every month, Mon-Fri.
-    - cron: "0 17 1-7 * 1-5"
+    - cron: '35 20 * * 1-5'
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Run in dry-run mode (no orders placed)"
-        type: boolean
-        default: true
-
-permissions:
-  contents: read
-
-concurrency:
-  group: discipline-bot
-  cancel-in-progress: false
 
 jobs:
   discipline:
@@ -38,7 +25,7 @@ jobs:
 
       - name: Discipline cycle
         env:
-  ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-  ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }} # <--- FIXED
-  ALPACA_PAPER: "true"
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          ALPACA_PAPER: "true"
         run: python -m discipline_bot.execute --dry-run
