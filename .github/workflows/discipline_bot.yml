@@ -38,7 +38,7 @@ jobs:
 
       - name: Discipline cycle
         env:
-          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_API_SECRET: ${{ secrets.ALPACA_SECRET_KEY }}
-          ALPACA_PAPER: "true"
+  ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+  ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }} # <--- FIXED
+  ALPACA_PAPER: "true"
         run: python -m discipline_bot.execute --dry-run
