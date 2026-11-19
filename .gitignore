@@ -8,3 +8,4 @@ journal/
 data/
 dev_tools/memory.db*
 dev_tools/rate_limits.json
+logs/
